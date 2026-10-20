@@ -1,0 +1,33 @@
+// Array-Schleifen mit {{#each}} und verschachtelten Elementen
+// (std::html + std::json).
+use std::html;
+use std::json;
+
+fn build_data() -> json::JsonValue {
+    let data = json::make_object();
+    let users = json::make_array();
+    let a = json::make_object();
+    json::set(a, "name", json::make_string("Ada <admin>"));
+    json::set(a, "role", json::make_string("Admin"));
+    json::push(users, a);
+    let b = json::make_object();
+    json::set(b, "name", json::make_string("Grace"));
+    json::set(b, "role", json::make_string("Dev"));
+    json::push(users, b);
+    json::set(data, "users", users);
+    let empty = json::make_array();
+    json::set(data, "empty", empty);
+    return data;
+}
+
+fn main() -> int {
+    let src = "<ul>{{#each users}}<li>{{this.name}} ({{this.role}})</li>{{/each}}</ul><p>leer: {{#each empty}}x{{/each}}fertig</p>";
+    match html::template(src) {
+        Result::Ok(t) => println(match html::render(t, build_data()) {
+            Result::Ok(v) => v,
+            Result::Err(e) => "FEHLER: " + e
+        }),
+        Result::Err(e) => println("PARSE-FEHLER: " + e)
+    };
+    return 0;
+}

@@ -1,0 +1,50 @@
+use std::process;
+
+fn show(o: process::ProcessOutput) -> string {
+    return "exit=" + str(o.exit_code) + " stdout=[" + o.stdout + "] stderr=[" + o.stderr + "]";
+}
+
+fn main() -> int {
+    // Programm und Argumente werden getrennt uebergeben (keine Shell).
+    let hello = process::run("cmd.exe", ["/C", "echo", "Hallo aus einem Prozess"]);
+    println(match hello {
+        Result::Ok(o) => o.stdout,
+        Result::Err(error) => "FEHLER: " + error
+    });
+
+    // Exit-Code ungleich null ist kein Fehler der Standardbibliothek.
+    let failed = process::run("cmd.exe", ["/C", "exit", "3"]);
+    println(match failed {
+        Result::Ok(o) => "exit-Code: " + str(o.exit_code),
+        Result::Err(error) => "FEHLER: " + error
+    });
+
+    // stdout und stderr getrennt
+    let mixed = process::run("cmd.exe", ["/C", "echo raus & echo fehler 1>&2"]);
+    println(match mixed {
+        Result::Ok(o) => show(o),
+        Result::Err(error) => "FEHLER: " + error
+    });
+
+    // Argumente mit Leerzeichen
+    let spaced = process::run("cmd.exe", ["/C", "echo", "ein argument mit leerzeichen"]);
+    println(match spaced {
+        Result::Ok(o) => o.stdout,
+        Result::Err(error) => "FEHLER: " + error
+    });
+
+    // Arbeitsverzeichnis
+    let in_windows = process::run_in("cmd.exe", ["/C", "cd"], "C:\\Windows");
+    println(match in_windows {
+        Result::Ok(o) => "cwd: " + o.stdout,
+        Result::Err(error) => "FEHLER: " + error
+    });
+
+    // Nicht vorhandenes Programm
+    let missing = process::run("gibt_es_nicht_xyz.exe", []);
+    println(match missing {
+        Result::Ok(o) => "unerwartet gestartet: " + str(o.exit_code),
+        Result::Err(error) => "Startfehler: " + error
+    });
+    return 0;
+}

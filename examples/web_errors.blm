@@ -1,0 +1,39 @@
+// Fehlerfälle: 404, 405 mit Allow-Liste und 400 bei ungültigem JSON.
+// Rein lokal: keine Netzwerkverbindung nötig.
+use std::web;
+use std::json;
+
+fn describe(r: Result<web::Match, string>) -> string {
+    return match r {
+        Result::Ok(m) => "status " + str(m.status) + " allow=[" + m.allow + "]",
+        Result::Err(e) => "400 bad request: " + e
+    };
+}
+
+fn body_result(r: Result<json::JsonValue, string>) -> string {
+    return match r {
+        Result::Ok(v) => "JSON: " + json::type_of(v),
+        Result::Err(e) => "400 bad request: " + e
+    };
+}
+
+fn main() -> int {
+    let router = web::router();
+    web::route(router, "GET", "/items", "list_items");
+    web::route(router, "POST", "/items", "create_item");
+    web::route(router, "GET", "/items/:id", "show_item");
+
+    // Unbekannter Pfad -> 404
+    println(describe(web::resolve(router, "GET", "/unknown")));
+    // Bekannter Pfad, falsche Methode -> 405 mit Allow
+    println(describe(web::resolve(router, "DELETE", "/items/7")));
+    println(describe(web::resolve(router, "PUT", "/items")));
+    // Kaputte Prozentkodierung -> Fehler (die Anwendung antwortet 400)
+    println(describe(web::resolve(router, "GET", "/items/%zz")));
+
+    // JSON-Körper: gültig, leer, kaputt
+    println(body_result(web::json_body("{\"name\": \"ada\"}")));
+    println(body_result(web::json_body("")));
+    println(body_result(web::json_body("{\"name\": }")));
+    return 0;
+}

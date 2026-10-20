@@ -1,0 +1,41 @@
+// TCP-Server: lauscht auf einem freien Port, gibt ihn aus, nimmt EINE
+// Verbindung an, spiegelt eine Zeile zurück und beendet sich.
+use std::net;
+
+fn ok_int(r: Result<int, string>) -> int {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => -1
+    };
+}
+
+fn opt_str(r: Result<Option<string>, string>) -> string {
+    return match r {
+        Result::Ok(o) => match o {
+            Option::Some(s) => s,
+            Option::None => "EOF"
+        },
+        Result::Err(e) => e
+    };
+}
+
+fn main() -> int {
+    let listener = ok_int(net::tcp_listen("127.0.0.1", 0, 4));
+    if listener < 0 {
+        println("listen fehlgeschlagen");
+        return 1;
+    }
+    println(ok_int(net::local_port(listener)));
+
+    let conn = ok_int(net::tcp_accept(listener));
+    if conn < 0 {
+        println("accept fehlgeschlagen");
+        return 1;
+    }
+    let data = opt_str(net::tcp_read(conn, 256));
+    println("empfangen: " + data);
+    net::tcp_write_all(conn, "echo: " + data);
+    net::tcp_close(conn);
+    net::tcp_close(listener);
+    return 0;
+}

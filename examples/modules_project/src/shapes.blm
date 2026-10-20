@@ -1,0 +1,40 @@
+pub struct Rectangle {
+    width: int,
+    height: int
+}
+
+pub enum Shape {
+    Circle(int),
+    Square(int)
+}
+
+impl Rectangle {
+    pub fn area(self) -> int {
+        return self.width * self.height;
+    }
+
+    pub fn scaled(self, factor: int) -> Rectangle {
+        return Rectangle {
+            width: self.width * factor,
+            height: self.height * factor
+        };
+    }
+}
+
+pub fn area(r: Rectangle) -> int {
+    return r.area();
+}
+
+pub fn scaled_rectangle(factor: int) -> Option<Rectangle> {
+    if factor <= 0 {
+        return Option::None;
+    }
+    return Option::Some(Rectangle {
+        width: factor,
+        height: factor * 2
+    });
+}
+
+fn internal_helper() -> int {
+    return 0;
+}

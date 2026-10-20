@@ -1,0 +1,37 @@
+// Kontrollierte Template-Fehler: Parserfehler und Renderfehler
+// (std::html + std::json).
+use std::html;
+use std::json;
+
+fn parse_result(src: string) -> string {
+    return match html::template(src) {
+        Result::Ok(t) => "OK",
+        Result::Err(e) => "PARSE-FEHLER: " + e
+    };
+}
+
+fn render_result(src: string, data: json::JsonValue) -> string {
+    return match html::template(src) {
+        Result::Ok(t) => match html::render(t, data) {
+            Result::Ok(v) => "OK " + v,
+            Result::Err(e) => "RENDER-FEHLER: " + e
+        },
+        Result::Err(e) => "PARSE-FEHLER: " + e
+    };
+}
+
+fn main() -> int {
+    let data = json::make_object();
+    json::set(data, "name", json::make_string("Ada"));
+    json::set(data, "none", json::null());
+
+    println(parse_result("{{name"));
+    println(parse_result("{{#if name}}x"));
+    println(parse_result("{{#foo x}}{{/foo}}"));
+    println(parse_result("<script>alert(1)</script>"));
+    println(render_result("{{missing}}", data));
+    println(render_result("{{none}}", data));
+    println(render_result("{{#if name}}x{{/if}}", data));
+    println(render_result("{{#each name}}x{{/each}}", data));
+    return 0;
+}

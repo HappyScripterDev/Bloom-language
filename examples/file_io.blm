@@ -1,0 +1,74 @@
+use std::fs;
+
+fn show(result: Result<string, string>) -> string {
+    return match result {
+        Result::Ok(text) => text,
+        Result::Err(error) => "FEHLER: " + error
+    };
+}
+
+fn show_bool(result: Result<bool, string>) -> string {
+    return match result {
+        Result::Ok(value) => str(value),
+        Result::Err(error) => "FEHLER: " + error
+    };
+}
+
+fn list(names: [string]) -> string {
+    var out = "";
+    var i = 0;
+    while i < len(names) {
+        out = out + "  " + names[i] + "\n";
+        i = i + 1;
+    }
+    return out;
+}
+
+fn main() -> int {
+    // Alles relativ zum aktuellen Verzeichnis (der Ordner wird am Ende
+    // wieder entfernt).
+    let dir = "bloom_file_io_demo";
+    println(match fs::create_dir_all(dir) {
+        Result::Ok(_) => "Verzeichnis bereit",
+        Result::Err(error) => "FEHLER: " + error
+    });
+
+    let file = fs::join_path(dir, "greeting.txt");
+    println(match fs::write_text(file, "Hallo, Bloom!\n") {
+        Result::Ok(bytes) => "geschrieben: " + str(bytes) + " Bytes",
+        Result::Err(error) => "FEHLER: " + error
+    });
+    println(match fs::append_text(file, "Zweite Zeile\n") {
+        Result::Ok(bytes) => "angehaengt: " + str(bytes) + " Bytes",
+        Result::Err(error) => "FEHLER: " + error
+    });
+
+    println("--- Dateiinhalt ---");
+    print(show(fs::read_text(file)));
+
+    println(match fs::file_size(file) {
+        Result::Ok(size) => "Groesse: " + str(size),
+        Result::Err(error) => "FEHLER: " + error
+    });
+    println("ist Datei: " + show_bool(fs::is_file(file)));
+    println("ist Verzeichnis: " + show_bool(fs::is_dir(dir)));
+
+    println("--- Verzeichnisinhalt ---");
+    match fs::read_dir(dir) {
+        Result::Ok(names) => print(list(names)),
+        Result::Err(error) => println("FEHLER: " + error)
+    };
+
+    let missing = fs::join_path(dir, "gibt_es_nicht.txt");
+    println("fehlende Datei: " + show(fs::read_text(missing)));
+
+    println(match fs::remove_file(file) {
+        Result::Ok(_) => "Datei geloescht",
+        Result::Err(error) => "FEHLER: " + error
+    });
+    println(match fs::remove_dir(dir) {
+        Result::Ok(_) => "Verzeichnis entfernt",
+        Result::Err(error) => "FEHLER: " + error
+    });
+    return 0;
+}

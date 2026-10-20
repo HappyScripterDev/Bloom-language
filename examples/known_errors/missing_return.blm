@@ -1,0 +1,7 @@
+fn compute(x: int) -> int {
+    let y = x + 1;
+}
+
+fn main() -> int {
+    return compute(1);
+}

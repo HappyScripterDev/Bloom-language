@@ -1,0 +1,124 @@
+// HTML-Seite über den bestehenden Web-/HTTP-Stack ausliefern
+// (std::html + std::web + std::json + std::http).
+// Startet auf einem freien Port, gibt ihn aus und beantwortet bis zu 10
+// Anfragen; danach beendet er sich.
+use std::html;
+use std::json;
+use std::web;
+use std::http;
+use std::net;
+
+fn ok_int(r: Result<int, string>) -> int {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => -1
+    };
+}
+
+fn write_text(conn: int, status: int, body: string) -> void {
+    http::write_response(conn, status, "text/plain; charset=utf-8", body);
+}
+
+fn users_example() -> json::JsonValue {
+    let users = json::make_array();
+    let a = json::make_object();
+    json::set(a, "name", json::make_string("Ada <admin>"));
+    json::set(a, "role", json::make_string("Admin"));
+    json::push(users, a);
+    let b = json::make_object();
+    json::set(b, "name", json::make_string("Grace"));
+    json::set(b, "role", json::make_string("Dev"));
+    json::push(users, b);
+    return users;
+}
+
+fn page_data(title: string) -> json::JsonValue {
+    let d = json::make_object();
+    json::set(d, "title", json::make_string(title));
+    json::set(d, "active", json::make_bool(true));
+    json::set(d, "users", users_example());
+    return d;
+}
+
+fn send_template_error(conn: int, e: string) -> void {
+    println("Renderfehler: " + e);
+    write_text(conn, 500, "template error");
+}
+
+fn send_page(conn: int, tmpl: html::Template, title: string) -> void {
+    let data = page_data(title);
+    match html::render_page_with(conn, 200, tmpl, data, "Cache-Control: no-store") {
+        Result::Ok(_) => println("Seite gesendet: " + title),
+        Result::Err(e) => send_template_error(conn, e)
+    };
+}
+
+fn handle_match(conn: int, tmpl: html::Template, m: web::Match) -> void {
+    if m.status == 404 {
+        write_text(conn, 404, "not found");
+        return;
+    }
+    if m.status == 405 {
+        http::write_response_full(conn, 405, "text/plain; charset=utf-8", "Allow: " + m.allow, "");
+        return;
+    }
+    send_page(conn, tmpl, m.name);
+}
+
+fn handle_request(conn: int, tmpl: html::Template, router: web::Router, request: http::HttpRequest) -> void {
+    match web::resolve_request(router, request) {
+        Result::Ok(m) => handle_match(conn, tmpl, m),
+        Result::Err(e) => write_text(conn, 400, "bad request")
+    };
+}
+
+fn handle(conn: int, tmpl: html::Template, router: web::Router) -> void {
+    match http::read_request(conn) {
+        Result::Ok(request) => handle_request(conn, tmpl, router, request),
+        Result::Err(e) => println("read_request: " + e)
+    };
+}
+
+fn serve(conn: int, tmpl: html::Template, router: web::Router) -> void {
+    handle(conn, tmpl, router);
+    net::tcp_close(conn);
+}
+
+fn parse_failed(e: string) -> int {
+    println("PARSE-FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    let src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{title}}</title></head>" +
+        "<body><h1>{{title}}</h1>" +
+        "{{#if active}}<ul>{{#each users}}<li>{{this.name}} ({{this.role}})</li>{{/each}}</ul>{{/if}}" +
+        "</body></html>";
+    let code = match html::template(src) {
+        Result::Ok(tmpl) => run(tmpl),
+        Result::Err(e) => parse_failed(e)
+    };
+    return code;
+}
+
+fn run(tmpl: html::Template) -> int {
+    let router = web::router();
+    web::route(router, "GET", "/", "Startseite");
+    web::route(router, "GET", "/users", "Benutzer");
+    let listener = ok_int(net::tcp_listen("127.0.0.1", 0, 4));
+    if listener < 0 {
+        println("listen fehlgeschlagen");
+        return 1;
+    }
+    println(ok_int(net::local_port(listener)));
+    var i = 0;
+    while i < 10 {
+        match net::tcp_accept(listener) {
+            Result::Ok(conn) => serve(conn, tmpl, router),
+            Result::Err(e) => println("accept error: " + e)
+        };
+        i = i + 1;
+    }
+    net::tcp_close(listener);
+    return 0;
+}

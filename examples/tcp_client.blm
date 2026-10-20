@@ -1,0 +1,34 @@
+// TCP-Client: verbindet zu 127.0.0.1:<port>, sendet eine Zeile und liest
+// die Antwort. Den Port interaktiv eingeben (der Test reicht ihn über stdin
+// ein).
+use std::net;
+
+fn ok_int(r: Result<int, string>) -> int {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => -1
+    };
+}
+
+fn opt_str(r: Result<Option<string>, string>) -> string {
+    return match r {
+        Result::Ok(o) => match o {
+            Option::Some(s) => s,
+            Option::None => "EOF"
+        },
+        Result::Err(e) => e
+    };
+}
+
+fn main() -> int {
+    let port = int(input("Port: "));
+    let sock = ok_int(net::tcp_connect("127.0.0.1", port));
+    println("verbunden");
+    println(ok_int(net::tcp_write_all(sock, "ping\n")));
+    println("empfangen: " + opt_str(net::tcp_read(sock, 256)));
+    println(match net::tcp_close(sock) {
+        Result::Ok(_) => "geschlossen",
+        Result::Err(e) => e
+    });
+    return 0;
+}

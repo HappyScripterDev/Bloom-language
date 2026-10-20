@@ -1,0 +1,38 @@
+use std::math;
+
+fn describe(parts: [string]) -> string {
+    return join(parts, ", ");
+}
+
+fn middle(values: [int]) -> [int] {
+    if len(values) < 3 {
+        return values;
+    }
+    return slice(values, 1, len(values) - 1);
+}
+
+fn main() -> int {
+    let colors = ["red", "green", "blue"];
+    println(describe(colors));
+
+    var queue: [string] = ["first", "second", "third"];
+    let removed = remove(queue, 1);
+    println(match removed {
+        Option::Some(v) => "removed " + v,
+        Option::None => "nothing removed"
+    });
+    println(join(queue, " | "));
+
+    let numbers = [10, 20, 30, 40, 50];
+    let inner = middle(numbers);
+    println(str(len(inner)));
+    println(str(inner[0]));
+    println(str(inner[len(inner) - 1]));
+
+    println(str(math::sqrt(144.0)));
+    println(str(math::pow(2.0, 8.0)));
+    println(str(math::clamp_int(99, 0, 10)));
+    println(str(math::max_int(3, 7)));
+
+    return 0;
+}

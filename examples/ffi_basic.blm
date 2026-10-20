@@ -1,0 +1,19 @@
+// FFI: direkte Windows-API-Aufrufe ohne zusätzliche Bibliotheken
+// (kernel32 ist über die C-Runtime immer gelinkt).
+extern "system" {
+    fn GetCurrentProcessId() -> c_uint;
+    fn GetTickCount64() -> c_ulonglong;
+    fn Sleep(ms: c_uint);
+}
+
+fn main() -> int {
+    unsafe {
+        println("Prozess-ID: " + str(int(GetCurrentProcessId())));
+        let start = int(GetTickCount64());
+        Sleep(c_uint(30));
+        let elapsed = int(GetTickCount64()) - start;
+        println("Wartezeit (ms): " + str(elapsed));
+        println("mindestens 20ms: " + str(elapsed >= 20));
+    }
+    return 0;
+}

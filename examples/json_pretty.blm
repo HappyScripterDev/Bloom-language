@@ -1,0 +1,26 @@
+// JSON kompakt und lesbar ausgeben (std::json).
+use std::json;
+
+fn show(r: Result<string, string>) -> string {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => "FEHLER: " + e
+    };
+}
+
+fn print_doc(doc: json::JsonValue) -> void {
+    println("kompakt:");
+    println(show(json::stringify(doc)));
+    println("lesbar:");
+    println(show(json::stringify_pretty(doc)));
+}
+
+fn main() -> int {
+    let text = "{\"project\":\"bloom\",\"versions\":[0,11,12]," +
+        "\"stable\":true,\"notes\":null,\"limits\":{\"depth\":128,\"input\":8388608}}";
+    match json::parse(text) {
+        Result::Ok(doc) => print_doc(doc),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}

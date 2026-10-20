@@ -1,0 +1,26 @@
+fn is_prime(n: int) -> bool {
+    if n < 2 {
+        return false;
+    }
+    var d = 2;
+    while d * d <= n {
+        if n % d == 0 {
+            return false;
+        }
+        d = d + 1;
+    }
+    return true;
+}
+
+fn main() -> int {
+    var count = 0;
+    for i in 2..50 {
+        if is_prime(i) {
+            println(i);
+            count = count + 1;
+        }
+    }
+    println("Count:");
+    println(count);
+    return 0;
+}

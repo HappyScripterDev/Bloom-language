@@ -1,0 +1,33 @@
+use std::time;
+
+fn main() -> int {
+    let seconds = time::unix_seconds();
+    let millis = time::unix_millis();
+    println("Unix-Sekunden: " + str(seconds));
+    println("Unix-Millis stimmen: " + str(millis / 1000 - seconds < 2));
+
+    println("Epoche: " + time::format_utc(0));
+    println("1e9:    " + time::format_utc(1000000000));
+    println("jetzt:  " + time::format_utc(seconds));
+
+    let start = time::monotonic_millis();
+    time::sleep_ms(120);
+    let elapsed = time::monotonic_millis() - start;
+    println("geschlafen (ms): " + str(elapsed));
+    println("mindestens 100ms: " + str(elapsed >= 100));
+
+    time::sleep_ms(0);
+    println("sleep_ms(0) ok");
+
+    var total = 0;
+    var i = 0;
+    while i < 5 {
+        let t0 = time::monotonic_millis();
+        time::sleep_ms(1);
+        let t1 = time::monotonic_millis();
+        total = total + (t1 - t0);
+        i = i + 1;
+    }
+    println("monoton (Summe >= 0): " + str(total >= 0));
+    return 0;
+}

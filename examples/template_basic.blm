@@ -1,0 +1,42 @@
+// Einfache Platzhalter (std::html + std::json).
+use std::html;
+use std::json;
+
+fn float_or_null(f: float) -> json::JsonValue {
+    return match json::make_float(f) {
+        Result::Ok(v) => v,
+        Result::Err(e) => json::null()
+    };
+}
+
+fn build_data() -> json::JsonValue {
+    let data = json::make_object();
+    json::set(data, "title", json::make_string("Bloom & Du"));
+    json::set(data, "count", json::make_int(3));
+    json::set(data, "pi", float_or_null(3.14));
+    json::set(data, "ready", json::make_bool(true));
+    let user = json::make_object();
+    json::set(user, "name", json::make_string("<Ada>"));
+    json::set(data, "user", user);
+    return data;
+}
+
+fn render_one(t: html::Template, data: json::JsonValue) -> void {
+    println(match html::render(t, data) {
+        Result::Ok(v) => v,
+        Result::Err(e) => "FEHLER: " + e
+    });
+}
+
+fn render_variants(t: html::Template) -> void {
+    render_one(t, build_data());
+    render_one(t, build_data());
+}
+
+fn main() -> int {
+    match html::template("<h1>{{title}}</h1><p>{{user.name}} hat {{count}} neue Nachrichten (pi ~ {{pi}}, bereit: {{ready}}).</p>") {
+        Result::Ok(t) => render_variants(t),
+        Result::Err(e) => println("PARSE-FEHLER: " + e)
+    };
+    return 0;
+}

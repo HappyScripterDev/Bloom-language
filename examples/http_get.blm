@@ -1,0 +1,22 @@
+// HTTP-Client: holt http://127.0.0.1:<port>/... und zeigt Status, Header
+// und Body. Den Port interaktiv eingeben.
+use std::http;
+
+fn show(r: http::HttpResponse) -> string {
+    return "Status: " + str(r.status) + " " + r.reason + "\n" +
+        "Content-Type: " + match http::header_get(r.headers, "content-type") {
+            Option::Some(v) => v,
+            Option::None => "(fehlt)"
+        } + "\n" +
+        "Body: " + r.body;
+}
+
+fn main() -> int {
+    let port = int(input("Port: "));
+    let url = "http://127.0.0.1:" + str(port) + "/demo";
+    println(match http::get(url) {
+        Result::Ok(r) => show(r),
+        Result::Err(e) => "FEHLER: " + e
+    });
+    return 0;
+}

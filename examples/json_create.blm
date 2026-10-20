@@ -1,0 +1,48 @@
+// JSON-Werte konstruieren, verändern und serialisieren (std::json).
+use std::json;
+
+fn show(r: Result<string, string>) -> string {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => "FEHLER: " + e
+    };
+}
+
+fn float_or_null(f: float) -> json::JsonValue {
+    return match json::make_float(f) {
+        Result::Ok(v) => v,
+        Result::Err(e) => json::null()
+    };
+}
+
+fn main() -> int {
+    let user = json::make_object();
+    json::set(user, "name", json::make_string("Ada Lovelace"));
+    json::set(user, "age", json::make_int(36));
+    json::set(user, "score", float_or_null(98.5));
+    json::set(user, "active", json::make_bool(true));
+
+    let skills = json::make_array();
+    json::push(skills, json::make_string("mathematics"));
+    json::push(skills, json::make_string("programming"));
+    json::push(skills, json::null());
+    json::set(user, "skills", skills);
+
+    // Ersetzen behält die Position des Schlüssels bei.
+    json::set(user, "age", json::make_int(37));
+
+    println(show(json::stringify(user)));
+
+    // Einzelwerte
+    println(show(json::stringify(json::make_int(-7))));
+    println(show(json::stringify(float_or_null(2.5))));
+    println(show(json::stringify(json::make_bool(false))));
+    println(show(json::stringify(json::null())));
+
+    // Zyklen werden abgelehnt
+    println(match json::set(user, "self", user) {
+        Result::Ok(_) => "unerwartet",
+        Result::Err(e) => "FEHLER: " + e
+    });
+    return 0;
+}

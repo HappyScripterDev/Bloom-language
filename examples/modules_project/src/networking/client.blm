@@ -1,0 +1,19 @@
+use shapes;
+
+pub struct Client {
+    host: string,
+    port: int,
+    reference: shapes::Rectangle
+}
+
+pub fn new_client(host: string, port: int, reference: shapes::Rectangle) -> Client {
+    return Client {
+        host: host,
+        port: port,
+        reference: reference
+    };
+}
+
+pub fn describe(c: Client) -> string {
+    return c.host + ":" + str(c.port) + " (" + str(shapes::area(c.reference)) + ")";
+}

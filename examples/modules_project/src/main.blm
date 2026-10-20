@@ -1,0 +1,32 @@
+use shapes;
+use networking::client;
+
+fn main() -> int {
+    let rect = shapes::Rectangle {
+        width: 3,
+        height: 4
+    };
+    println("area:");
+    println(shapes::area(rect));
+
+    let shape = shapes::Shape::Circle(2);
+    let circle_area = match shape {
+        shapes::Shape::Circle(radius) => 3 * radius * radius,
+        shapes::Shape::Square(side) => side * side
+    };
+    println("circle:");
+    println(circle_area);
+
+    let connection = client::new_client("localhost", 8080, rect);
+    println(client::describe(connection));
+
+    let maybe_scaled = shapes::scaled_rectangle(5);
+    let scaled_area = match maybe_scaled {
+        Option::Some(scaled) => scaled.area(),
+        Option::None => 0
+    };
+    println("scaled:");
+    println(scaled_area);
+
+    return 0;
+}

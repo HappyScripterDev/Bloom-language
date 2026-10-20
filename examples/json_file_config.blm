@@ -1,0 +1,110 @@
+// JSON-Konfigurationsdatei lesen, verändern und zurückschreiben
+// (std::json + std::fs + std::path).
+use std::json;
+use std::fs;
+use std::path;
+
+fn show_str(r: Result<string, string>) -> string {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => "FEHLER: " + e
+    };
+}
+
+fn show_int(r: Result<int, string>) -> string {
+    return match r {
+        Result::Ok(v) => str(v),
+        Result::Err(e) => "FEHLER: " + e
+    };
+}
+
+fn build_config() -> json::JsonValue {
+    let config = json::make_object();
+    json::set(config, "version", json::make_int(1));
+    json::set(config, "name", json::make_string("bloom-demo"));
+    let paths = json::make_array();
+    json::push(paths, json::make_string("C:\\projekte\\src"));
+    json::push(paths, json::make_string("C:\\projekte\\tests"));
+    json::set(config, "paths", paths);
+    return config;
+}
+
+// Gibt "" bei Erfolg zurück, sonst die Fehlermeldung.
+fn write_json(file: string, config: json::JsonValue) -> string {
+    return match json::stringify_pretty(config) {
+        Result::Ok(text) => match fs::write_text(file, text) {
+            Result::Ok(_) => "",
+            Result::Err(e) => e
+        },
+        Result::Err(e) => e
+    };
+}
+
+fn print_config(config: json::JsonValue) -> void {
+    println("name: " + show_str(json::get_string(config, "name")));
+    println("version: " + show_int(json::get_int(config, "version")));
+    let paths = match json::get(config, "paths") {
+        Option::Some(v) => v,
+        Option::None => json::make_array()
+    };
+    let n = match json::array_length(paths) {
+        Result::Ok(v) => v,
+        Result::Err(e) => 0
+    };
+    var i = 0;
+    while i < n {
+        let entry = match json::array_get(paths, i) {
+            Option::Some(v) => v,
+            Option::None => json::null()
+        };
+        println("pfad " + str(i) + ": " + show_str(json::as_string(entry)));
+        i = i + 1;
+    }
+}
+
+fn main() -> int {
+    let file = path::join(".", "bloom_config_demo.json");
+    let err1 = write_json(file, build_config());
+    if err1 != "" {
+        println("FEHLER: " + err1);
+        return 1;
+    }
+    println("Konfiguration geschrieben: " + file);
+
+    let loaded = match fs::read_text(file) {
+        Result::Ok(v) => v,
+        Result::Err(e) => ""
+    };
+    let doc = match json::parse(loaded) {
+        Result::Ok(v) => v,
+        Result::Err(e) => json::null()
+    };
+    if json::type_of(doc) != "object" {
+        println("FEHLER: Datei ist kein gültiges JSON-Objekt");
+        fs::remove_file(file);
+        return 1;
+    }
+    print_config(doc);
+
+    let set_result = json::set(doc, "version", json::make_int(2));
+    let err2 = match set_result {
+        Result::Ok(_) => "",
+        Result::Err(e) => e
+    };
+    if err2 != "" {
+        println("FEHLER: " + err2);
+        fs::remove_file(file);
+        return 1;
+    }
+    let err3 = write_json(file, doc);
+    if err3 != "" {
+        println("FEHLER: " + err3);
+        fs::remove_file(file);
+        return 1;
+    }
+    println("Version erhöht und gespeichert.");
+
+    fs::remove_file(file);
+    println("Datei entfernt: " + file);
+    return 0;
+}

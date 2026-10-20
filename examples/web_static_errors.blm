@@ -1,0 +1,85 @@
+// Fehlerfaelle beim Ausliefern statischer Dateien.
+// Zeigt die Zuordnung von std::web::static_file:
+//   200 Datei gefunden       404 Datei/Ordner fehlt
+//   405 falsche Methode      400 unsicherer Pfad (.., absolute Pfade,
+//   500 Lesefehler/Groesse      kodierte Trenner, Symlink/Junction hinaus)
+// Der Server gibt den Port aus und beantwortet 8 Anfragen; die
+// zurueckgegebene Statusnummer wird jeweils protokolliert.
+use std::web;
+use std::http;
+use std::net;
+use std::fs;
+
+fn ok_int(r: Result<int, string>) -> int {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => -1
+    };
+}
+
+fn write_demo_file(path: string, text: string) -> void {
+    match fs::write_text(path, text) {
+        Result::Ok(_) => println("Datei: " + path),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+}
+
+fn setup(dir: string) -> void {
+    match fs::create_dir_all(dir) {
+        Result::Ok(_) => println("Verzeichnis bereit"),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    write_demo_file(fs::join_path(dir, "index.txt"), "vorhanden");
+}
+
+fn cleanup(dir: string) -> void {
+    fs::remove_file(fs::join_path(dir, "index.txt"));
+    fs::remove_dir(dir);
+}
+
+fn serve(conn: int, request: http::HttpRequest) -> void {
+    match web::static_file(conn, "bloom_static_errors_demo", request) {
+        Result::Ok(status) => println("Status " + str(status) + ": " + request.method + " " + request.target),
+        Result::Err(e) => println("Schreibfehler: " + e)
+    };
+    net::tcp_close(conn);
+}
+
+fn read_failed(conn: int, e: string) -> void {
+    println("Lesefehler: " + e);
+    net::tcp_close(conn);
+}
+
+fn handle(conn: int) -> void {
+    match http::read_request(conn) {
+        Result::Ok(request) => serve(conn, request),
+        Result::Err(e) => read_failed(conn, e)
+    };
+}
+
+fn accept_next(listener: int) -> void {
+    match net::tcp_accept(listener) {
+        Result::Ok(conn) => handle(conn),
+        Result::Err(e) => println("accept: " + e)
+    };
+}
+
+fn main() -> int {
+    let dir = "bloom_static_errors_demo";
+    setup(dir);
+    let listener = ok_int(net::tcp_listen("127.0.0.1", 0, 8));
+    if listener < 0 {
+        println("listen fehlgeschlagen");
+        cleanup(dir);
+        return 1;
+    }
+    println(ok_int(net::local_port(listener)));
+    var i = 0;
+    while i < 8 {
+        accept_next(listener);
+        i = i + 1;
+    }
+    net::tcp_close(listener);
+    cleanup(dir);
+    return 0;
+}

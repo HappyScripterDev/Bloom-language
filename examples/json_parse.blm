@@ -1,0 +1,64 @@
+// JSON parsen und Felder auslesen (std::json).
+use std::json;
+
+fn show_str(r: Result<string, string>) -> string {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => "FEHLER: " + e
+    };
+}
+
+fn show_int(r: Result<int, string>) -> string {
+    return match r {
+        Result::Ok(v) => str(v),
+        Result::Err(e) => "FEHLER: " + e
+    };
+}
+
+fn show_bool(r: Result<bool, string>) -> string {
+    return match r {
+        Result::Ok(v) => str(v),
+        Result::Err(e) => "FEHLER: " + e
+    };
+}
+
+fn get_or_null(v: json::JsonValue, key: string) -> json::JsonValue {
+    return match json::get(v, key) {
+        Option::Some(child) => child,
+        Option::None => json::null()
+    };
+}
+
+fn first_or_null(v: json::JsonValue) -> json::JsonValue {
+    return match json::array_get(v, 0) {
+        Option::Some(child) => child,
+        Option::None => json::null()
+    };
+}
+
+fn print_document(doc: json::JsonValue) -> void {
+    println("Typ: " + json::type_of(doc));
+    println("Name: " + show_str(json::get_string(doc, "name")));
+    println("Alter: " + show_int(json::get_int(doc, "age")));
+    println("Aktiv: " + show_bool(json::get_bool(doc, "active")));
+    let address = get_or_null(doc, "address");
+    println("Stadt: " + show_str(json::get_string(address, "city")));
+    let tags = get_or_null(doc, "tags");
+    println("Tags: " + show_int(json::array_length(tags)));
+    println("Erster Tag: " + show_str(json::as_string(first_or_null(tags))));
+    println("Zweiter Tag: " + show_str(json::as_string(match json::array_get(tags, 1) {
+        Option::Some(child) => child,
+        Option::None => json::null()
+    })));
+}
+
+fn main() -> int {
+    let text = "{\"name\": \"Ada\", \"age\": 36, \"active\": true, " +
+        "\"address\": {\"city\": \"London\", \"zip\": \"N1\"}, " +
+        "\"tags\": [\"math\", \"code\"]}";
+    match json::parse(text) {
+        Result::Ok(doc) => print_document(doc),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}

@@ -1,0 +1,56 @@
+enum Shape {
+    Circle(float),
+    Rectangle { width: float, height: float }
+}
+
+impl Shape {
+    fn circle(radius: float) -> Shape {
+        return Shape::Circle(radius);
+    }
+
+    fn rect(width: float, height: float) -> Shape {
+        return Shape::Rectangle {
+            width: width,
+            height: height
+        };
+    }
+
+    fn is_circle(self) -> bool {
+        return match self {
+            Shape::Circle(_) => true,
+            Shape::Rectangle { width: _, height: _ } => false
+        };
+    }
+
+    fn describe(self) -> string {
+        return match self {
+            Shape::Circle(radius) => "circle " + str(radius),
+            Shape::Rectangle { width, height } => "rect " + str(width) + "x" + str(height)
+        };
+    }
+}
+
+impl<T> Option<T> {
+    fn is_some(self) -> bool {
+        return match self {
+            Option::Some(_) => true,
+            Option::None => false
+        };
+    }
+}
+
+fn main() -> int {
+    let a = Shape::circle(2.5);
+    let b = Shape::rect(3.0, 4.0);
+    println(a.describe());
+    println(b.describe());
+    println(a.is_circle());
+    println(b.is_circle());
+
+    let some: Option<int> = Option::Some(5);
+    let none: Option<int> = Option::None;
+    println(some.is_some());
+    println(none.is_some());
+
+    return 0;
+}

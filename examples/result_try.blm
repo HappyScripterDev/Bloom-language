@@ -1,0 +1,36 @@
+fn parse_count(text: string) -> Result<int, string> {
+    let trimmed = trim(text);
+    if len(trimmed) == 0 {
+        return Result::Err("empty input");
+    }
+    return Result::Ok(int(trimmed));
+}
+
+fn doubled(text: string) -> Result<int, string> {
+    let value = parse_count(text)?;
+    return Result::Ok(value * 2);
+}
+
+fn summarize(text: string) -> Result<string, string> {
+    let value = doubled(text)?;
+    return Result::Ok("value is " + str(value));
+}
+
+fn main() -> int {
+    println(match doubled("21") {
+        Result::Ok(v) => "ok " + str(v),
+        Result::Err(e) => "error: " + e
+    });
+
+    println(match summarize("5") {
+        Result::Ok(s) => s,
+        Result::Err(e) => "error: " + e
+    });
+
+    println(match summarize("") {
+        Result::Ok(s) => s,
+        Result::Err(e) => "error: " + e
+    });
+
+    return 0;
+}

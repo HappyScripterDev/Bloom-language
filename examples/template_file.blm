@@ -1,0 +1,58 @@
+// HTML-Vorlagen aus Dateien laden (std::html + std::fs).
+// Erzeugt eine Vorlage, rendert sie mehrfach, zeigt die Fehlerfaelle
+// (fehlende Datei, kaputte Vorlage) und raeumt am Ende wieder auf.
+use std::html;
+use std::json;
+use std::fs;
+
+fn render(t: html::Template, title: string) -> void {
+    let data = json::make_object();
+    json::set(data, "title", json::make_string(title));
+    match html::render(t, data) {
+        Result::Ok(s) => print(s),
+        Result::Err(e) => println("Renderfehler: " + e)
+    };
+}
+
+fn try_file(path: string, title: string) -> void {
+    match html::template_file(path) {
+        Result::Ok(t) => render(t, title),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+}
+
+fn main() -> int {
+    let dir = "bloom_template_demo";
+    let path = fs::join_path(dir, "page.html");
+    let broken = fs::join_path(dir, "broken.html");
+    match fs::create_dir_all(dir) {
+        Result::Ok(_) => println("Verzeichnis bereit"),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    match fs::write_text(path, "<!doctype html>\n<h1>{{title}}</h1>\n<p>{{title}}</p>\n") {
+        Result::Ok(n) => println("Vorlage geschrieben: " + str(n) + " Bytes"),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    try_file(path, "Startseite");
+    try_file(path, "Zweite Seite");
+    println("--- Fehlerfaelle ---");
+    try_file(fs::join_path(dir, "fehlt.html"), "x");
+    match fs::write_text(broken, "{{#if}}") {
+        Result::Ok(_) => println("kaputte Vorlage geschrieben"),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    try_file(broken, "x");
+    match fs::remove_file(path) {
+        Result::Ok(_) => println("Vorlage geloescht"),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    match fs::remove_file(broken) {
+        Result::Ok(_) => println("kaputte Vorlage geloescht"),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    match fs::remove_dir(dir) {
+        Result::Ok(_) => println("Verzeichnis entfernt"),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}

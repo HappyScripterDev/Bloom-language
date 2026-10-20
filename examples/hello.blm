@@ -1,0 +1,4 @@
+fn main() -> int {
+    println("Hello from Bloom!");
+    return 0;
+}

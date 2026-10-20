@@ -1,0 +1,53 @@
+struct Point {
+    x: int,
+    y: int
+}
+
+impl Point {
+    fn magnitude_squared(self) -> int {
+        return self.x * self.x + self.y * self.y;
+    }
+
+    fn translated(self, dx: int, dy: int) -> Point {
+        return Point {
+            x: self.x + dx,
+            y: self.y + dy
+        };
+    }
+
+    fn translate(var self, dx: int, dy: int) -> void {
+        self.x = self.x + dx;
+        self.y = self.y + dy;
+    }
+
+    fn sum_with(self, other: Point) -> int {
+        return self.x + other.x + self.y + other.y;
+    }
+}
+
+fn main() -> int {
+    var p = Point {
+        x: 3,
+        y: 4
+    };
+    println(p.magnitude_squared());
+
+    let q = p.translated(10, 20);
+    println(q.x);
+    println(q.y);
+    println(p.x);
+
+    p.translate(1, 1);
+    println(p.x);
+    println(p.y);
+    println(p.sum_with(q));
+
+    var copy = p;
+    copy.translate(100, 0);
+    println(p.x);
+    println(copy.x);
+
+    println(p.translated(1, 1).translated(1, 1).magnitude_squared());
+
+    return 0;
+}

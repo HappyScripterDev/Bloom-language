@@ -1,0 +1,30 @@
+fn main() -> int {
+    let numbers = [10, 20, 30];
+
+    println(numbers[0]);
+    println(numbers[1]);
+    println("len = " + str(len(numbers)));
+
+    var total = 0;
+    for i in 0..len(numbers) {
+        total = total + numbers[i];
+    }
+    println("sum = " + str(total));
+
+    var squares: [int] = [];
+    for i in 0..5 {
+        push(squares, i * i);
+    }
+    println("squares len = " + str(len(squares)));
+    println(squares[4]);
+
+    var names = ["Ada", "Alan"];
+    push(names, "Grace");
+    println(names[2]);
+
+    var mixed: [float] = [1, 2.5];
+    push(mixed, 3);
+    println(mixed[2]);
+
+    return 0;
+}

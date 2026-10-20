@@ -1,0 +1,60 @@
+struct Point {
+    x: int,
+    y: int
+}
+
+struct Rectangle {
+    top_left: Point,
+    bottom_right: Point,
+    label: string
+}
+
+fn make_point(x: int, y: int) -> Point {
+    return Point {
+        x: x,
+        y: y
+    };
+}
+
+fn sum_point(p: Point) -> int {
+    return p.x + p.y;
+}
+
+fn area(r: Rectangle) -> int {
+    let width = r.bottom_right.x - r.top_left.x;
+    let height = r.bottom_right.y - r.top_left.y;
+    return width * height;
+}
+
+fn main() -> int {
+    var a = Point {
+        x: 10,
+        y: 20
+    };
+    println(a.x);
+    println(a.y);
+
+    var b = a;
+    b.x = 99;
+    println(a.x);
+    println(b.x);
+
+    let p = make_point(15, 25);
+    println(sum_point(p));
+
+    var r = Rectangle {
+        top_left: make_point(0, 0),
+        bottom_right: Point {
+            x: 5,
+            y: 4
+        },
+        label: "flaeche"
+    };
+    println(area(r));
+    println(r.label);
+
+    r.bottom_right.x = 10;
+    println(area(r));
+
+    return 0;
+}

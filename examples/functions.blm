@@ -1,0 +1,25 @@
+fn add(a: int, b: int) -> int {
+    return a + b;
+}
+
+fn factorial(n: int) -> int {
+    if n <= 1 {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+fn greet(name: string) -> void {
+    println("Hello, " + name + "!");
+}
+
+fn main() -> int {
+    let result = add(12, 30);
+    println(result);
+
+    println(factorial(10));
+
+    greet("Bloom");
+
+    return 0;
+}

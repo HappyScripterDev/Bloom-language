@@ -1,0 +1,34 @@
+// Lexikalische Pfadoperationen (std::path) — ohne Dateisystemzugriff.
+use std::path;
+
+fn show_opt(o: Option<string>) -> string {
+    return match o {
+        Option::Some(v) => v,
+        Option::None => "(keiner)"
+    };
+}
+
+fn show_norm(r: Result<string, string>) -> string {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => "FEHLER: " + e
+    };
+}
+
+fn main() -> int {
+    println("join:     " + path::join("C:\\projekte", "bloom\\src"));
+    println("join abs: " + path::join("C:\\projekte", "D:\\andere"));
+    println("parent:   " + show_opt(path::parent("C:\\projekte\\bloom\\main.blm")));
+    println("datei:    " + show_opt(path::file_name("C:\\projekte\\main.blm")));
+    println("endung:   " + show_opt(path::extension("bericht.2024.txt")));
+    println("stamm:    " + show_opt(path::stem("bericht.2024.txt")));
+    println("versteckt: " + show_opt(path::stem(".konfiguration")));
+    println("absolut:  " + str(path::is_absolute("C:\\temp")));
+    println("relativ:  " + str(path::is_absolute("temp\\datei")));
+    println("ersetzen: " + path::with_extension("C:\\a\\bericht.txt", "md"));
+    println("entfernen: " + path::with_extension("C:\\a\\bericht.txt", ""));
+    println("normal:   " + show_norm(path::normalize("C:\\a\\.\\b\\..\\c\\\\d")));
+    println("relativ:  " + show_norm(path::normalize("..\\a\\..\\b")));
+    println("unc:      " + show_norm(path::normalize("\\\\server\\share\\a\\..\\b")));
+    return 0;
+}

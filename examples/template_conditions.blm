@@ -1,0 +1,33 @@
+// Boolesche Bedingungen mit {{#if}} und {{else}} (std::html + std::json).
+use std::html;
+use std::json;
+
+fn build_data(active: bool) -> json::JsonValue {
+    let data = json::make_object();
+    json::set(data, "name", json::make_string("Ada"));
+    json::set(data, "active", json::make_bool(active));
+    let features = json::make_object();
+    json::set(features, "beta", json::make_bool(true));
+    json::set(data, "features", features);
+    return data;
+}
+
+fn render_one(t: html::Template, data: json::JsonValue) -> void {
+    println(match html::render(t, data) {
+        Result::Ok(v) => v,
+        Result::Err(e) => "FEHLER: " + e
+    });
+}
+
+fn render_both(t: html::Template) -> void {
+    render_one(t, build_data(true));
+    render_one(t, build_data(false));
+}
+
+fn main() -> int {
+    match html::template("<p>{{name}}: {{#if active}}aktiv{{else}}inaktiv{{/if}}</p>{{#if features.beta}}<p>Beta</p>{{/if}}") {
+        Result::Ok(t) => render_both(t),
+        Result::Err(e) => println("PARSE-FEHLER: " + e)
+    };
+    return 0;
+}

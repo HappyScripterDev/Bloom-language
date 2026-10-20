@@ -1,0 +1,116 @@
+// REST-Server mit JSON-Ein- und -Ausgabe (std::web + std::json + std::http).
+// Startet auf einem freien Port, gibt ihn aus und beantwortet bis zu 10
+// Anfragen; danach beendet er sich.
+use std::web;
+use std::json;
+use std::http;
+use std::net;
+
+fn ok_int(r: Result<int, string>) -> int {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => -1
+    };
+}
+
+fn write_text(conn: int, status: int, body: string) -> void {
+    http::write_response(conn, status, "text/plain; charset=utf-8", body);
+}
+
+fn param_or_empty(m: web::Match, key: string) -> string {
+    return match json::get_string(m.params, key) {
+        Result::Ok(v) => v,
+        Result::Err(e) => ""
+    };
+}
+
+fn send_echo(conn: int, name: string, body: json::JsonValue) -> void {
+    let reply = json::make_object();
+    json::set(reply, "received", body);
+    json::set(reply, "route", json::make_string(name));
+    web::json_response(conn, 200, reply);
+}
+
+fn send_user(conn: int, m: web::Match) -> void {
+    let reply = json::make_object();
+    json::set(reply, "id", json::make_string(param_or_empty(m, "id")));
+    json::set(reply, "route", json::make_string(m.name));
+    web::json_response(conn, 200, reply);
+}
+
+fn dispatch(router: web::Router, conn: int, request: http::HttpRequest, m: web::Match) -> void {
+    if m.name == "echo" {
+        match web::json_body_request(request) {
+            Result::Ok(body) => send_echo(conn, m.name, body),
+            Result::Err(e) => write_text(conn, 400, "invalid json: " + e)
+        };
+        return;
+    }
+    if m.name == "status" {
+        web::json_response(conn, 200, json::make_object());
+        return;
+    }
+    if m.name == "show_user" {
+        send_user(conn, m);
+        return;
+    }
+    if m.name == "empty" {
+        // 204: niemals ein Body, auch wenn einer übergeben würde
+        http::write_response(conn, 204, "", "ignored");
+        return;
+    }
+    write_text(conn, 500, "unhandled route");
+}
+
+fn handle_request(router: web::Router, conn: int, request: http::HttpRequest) -> void {
+    match web::resolve_request(router, request) {
+        Result::Ok(m) => handle_match(router, conn, request, m),
+        Result::Err(e) => write_text(conn, 400, "bad request: " + e)
+    };
+}
+
+fn handle_match(router: web::Router, conn: int, request: http::HttpRequest, m: web::Match) -> void {
+    if m.status == 404 {
+        write_text(conn, 404, "not found");
+        return;
+    }
+    if m.status == 405 {
+        web::json_response_with(conn, 405, json::make_object(), "Allow: " + m.allow);
+        return;
+    }
+    dispatch(router, conn, request, m);
+}
+
+fn handle(router: web::Router, conn: int) -> void {
+    match http::read_request(conn) {
+        Result::Ok(request) => handle_request(router, conn, request),
+        Result::Err(e) => println("read_request: " + e)
+    };
+}
+
+fn main() -> int {
+    let router = web::router();
+    web::route(router, "POST", "/echo", "echo");
+    web::route(router, "GET", "/status", "status");
+    web::route(router, "GET", "/empty", "empty");
+    web::route(router, "GET", "/users/:id", "show_user");
+
+    let listener = ok_int(net::tcp_listen("127.0.0.1", 0, 4));
+    if listener < 0 {
+        println("listen fehlgeschlagen");
+        return 1;
+    }
+    println(ok_int(net::local_port(listener)));
+
+    var i = 0;
+    while i < 10 {
+        let conn = ok_int(net::tcp_accept(listener));
+        if conn >= 0 {
+            handle(router, conn);
+            net::tcp_close(conn);
+        }
+        i = i + 1;
+    }
+    net::tcp_close(listener);
+    return 0;
+}

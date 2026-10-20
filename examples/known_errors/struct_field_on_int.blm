@@ -1,0 +1,9 @@
+struct Point {
+    x: int,
+    y: int
+}
+
+fn main() -> int {
+    let n = 42;
+    return n.x;
+}

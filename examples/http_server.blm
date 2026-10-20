@@ -1,0 +1,51 @@
+// HTTP-Server: lauscht auf einem freien Port, gibt ihn aus, beantwortet
+// EINE Anfrage und beendet sich.
+use std::net;
+use std::http;
+
+fn ok_int(r: Result<int, string>) -> int {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => -1
+    };
+}
+
+fn describe(req: http::HttpRequest) -> string {
+    return req.method + " " + req.target + " (" + match http::header_get(req.headers, "host") {
+        Option::Some(v) => v,
+        Option::None => "kein Host"
+    } + ")";
+}
+
+fn status_for(request: string) -> int {
+    if starts_with(request, "GET ") {
+        return 200;
+    }
+    return 405;
+}
+
+fn main() -> int {
+    let listener = ok_int(net::tcp_listen("127.0.0.1", 0, 4));
+    if listener < 0 {
+        println("listen fehlgeschlagen");
+        return 1;
+    }
+    println(ok_int(net::local_port(listener)));
+
+    let conn = ok_int(net::tcp_accept(listener));
+    if conn < 0 {
+        println("accept fehlgeschlagen");
+        return 1;
+    }
+
+    let request = match http::read_request(conn) {
+        Result::Ok(req) => describe(req),
+        Result::Err(e) => "FEHLER: " + e
+    };
+    println("Anfrage: " + request);
+
+    http::write_response(conn, status_for(request), "text/plain; charset=utf-8", "Hallo von Bloom!");
+    net::tcp_close(conn);
+    net::tcp_close(listener);
+    return 0;
+}

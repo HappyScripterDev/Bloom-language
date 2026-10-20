@@ -1,0 +1,34 @@
+// JSON über HTTP abrufen und auswerten (std::http + std::json).
+// Fragt den Port interaktiv ab und ruft GET /status ab.
+use std::http;
+use std::json;
+
+fn print_json(doc: json::JsonValue) -> void {
+    println("Typ: " + json::type_of(doc));
+    match json::stringify(doc) {
+        Result::Ok(text) => println("Body: " + text),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+}
+
+fn print_response(response: http::HttpResponse) -> void {
+    println("Status: " + str(response.status));
+    println("Content-Type: " + match http::header_get(response.headers, "content-type") {
+        Option::Some(v) => v,
+        Option::None => "(fehlt)"
+    });
+    match json::parse(response.body) {
+        Result::Ok(doc) => print_json(doc),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+}
+
+fn main() -> int {
+    let port = int(input("Port: "));
+    let url = "http://127.0.0.1:" + str(port) + "/status";
+    match http::get(url) {
+        Result::Ok(response) => print_response(response),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}

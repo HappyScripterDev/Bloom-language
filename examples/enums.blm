@@ -1,0 +1,51 @@
+enum Direction {
+    North,
+    South,
+    East,
+    West
+}
+
+enum Message {
+    Quit,
+    Move { x: int, y: int },
+    Write(string)
+}
+
+fn describe(d: Direction) -> string {
+    return match d {
+        Direction::North => "north",
+        Direction::South => "south",
+        Direction::East => "east",
+        Direction::West => "west"
+    };
+}
+
+fn size(m: Message) -> int {
+    return match m {
+        Message::Quit => 0,
+        Message::Move { x, y } => x + y,
+        Message::Write(text) => len(text)
+    };
+}
+
+fn main() -> int {
+    println(describe(Direction::North));
+    println(describe(Direction::West));
+
+    let m1 = Message::Quit;
+    let m2 = Message::Move {
+        x: 3,
+        y: 4
+    };
+    let m3 = Message::Write("hello");
+
+    println(size(m1));
+    println(size(m2));
+    println(size(m3));
+
+    var current = Direction::East;
+    current = Direction::South;
+    println(describe(current));
+
+    return 0;
+}

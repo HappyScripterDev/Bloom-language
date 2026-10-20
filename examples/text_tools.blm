@@ -1,0 +1,47 @@
+fn describe(score: int) -> string {
+    return match score {
+        n if n >= 90 => "A",
+        n if n >= 50 => "B",
+        0 => "zero",
+        _ => "F"
+    };
+}
+
+fn main() -> int {
+    println(describe(95));
+    println(describe(60));
+    println(describe(0));
+    println(describe(10));
+
+    var values: [int] = [1, 2, 3];
+    let popped = pop(values);
+    match popped {
+        Option::Some(v) => println(str(v)),
+        Option::None => println("empty")
+    };
+    insert(values, 0, 10);
+    insert(values, len(values), 40);
+    print("values:");
+    var i = 0;
+    while i < len(values) {
+        print(" ");
+        print(str(values[i]));
+        i = i + 1;
+    }
+    println("");
+
+    let text = "  Hello, World  ";
+    let clean = trim(text);
+    println(contains(clean, "World"));
+    println(starts_with(clean, "Hello"));
+    println(ends_with(clean, "World"));
+    println(replace(clean, "World", "Bloom"));
+    println(to_upper(clean));
+    println(to_lower(clean));
+
+    let words = split(clean, ", ");
+    println(len(words));
+    println(words[0]);
+    println(words[1]);
+    return 0;
+}

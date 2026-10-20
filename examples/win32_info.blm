@@ -1,0 +1,24 @@
+use std::win32;
+
+fn name_ok(r: Result<string, string>) -> bool {
+    return match r {
+        Result::Ok(name) => len(name) > 0,
+        Result::Err(_) => false
+    };
+}
+
+fn main() -> int {
+    println("Prozess-ID: " + str(win32::process_id()));
+    println("Tick (ms): " + str(win32::tick_count_ms()));
+    println("Letzter Fehler: " + str(win32::last_error()));
+    println("Computername vorhanden: " + str(name_ok(win32::get_computer_name())));
+
+    let start = win32::tick_count_ms();
+    win32::sleep_ms(50);
+    let elapsed = win32::tick_count_ms() - start;
+    println("Geschlafen (ms): " + str(elapsed));
+
+    // message_box wird nicht automatisch getestet (blockiert auf Eingabe):
+    // win32::message_box("Bloom", "Hallo!", 0);
+    return 0;
+}

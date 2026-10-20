@@ -1,0 +1,13 @@
+// HTML-Escaping für Benutzereingaben (std::html).
+// Escapen schützt HTML-Text und quotierte Attributwerte — nicht
+// JavaScript-, CSS- oder URL-Kontexte.
+use std::html;
+
+fn main() -> int {
+    let raw = "<a href=\"x\">Tom & Jerry's</a>";
+    println("roh:     " + raw);
+    println("escaped: " + html::escape(raw));
+    println("leer:    [" + html::escape("") + "]");
+    println("unicode: " + html::escape("Grüße — 日本語 & 😀 <ok>"));
+    return 0;
+}

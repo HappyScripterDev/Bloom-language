@@ -1,0 +1,28 @@
+fn add(a: int, b: int) -> int {
+    return a + b;
+}
+
+fn sub(a: int, b: int) -> int {
+    return a - b;
+}
+
+fn mul(a: int, b: int) -> int {
+    return a * b;
+}
+
+fn div(a: int, b: int) -> int {
+    return a / b;
+}
+
+fn main() -> int {
+    println("Bloom calculator");
+    let a = int(input("First number: "));
+    let b = int(input("Second number: "));
+
+    println("a + b = " + str(add(a, b)));
+    println("a - b = " + str(sub(a, b)));
+    println("a * b = " + str(mul(a, b)));
+    println("a / b = " + str(div(a, b)));
+
+    return 0;
+}

@@ -1,0 +1,72 @@
+struct Pair<A, B> {
+    first: A,
+    second: B
+}
+
+struct Box<T> {
+    value: T
+}
+
+impl<T> Box<T> {
+    fn get(self) -> T {
+        return self.value;
+    }
+
+    fn replace(self, value: T) -> Box<T> {
+        return Box {
+            value: value
+        };
+    }
+}
+
+fn identity<T>(value: T) -> T {
+    return value;
+}
+
+fn make_pair<A, B>(first: A, second: B) -> Pair<A, B> {
+    return Pair {
+        first: first,
+        second: second
+    };
+}
+
+fn main() -> int {
+    let pair = Pair {
+        first: 42,
+        second: "Bloom"
+    };
+    println(pair.first);
+    println(pair.second);
+
+    let boxed = Box {
+        value: 99
+    };
+    println(boxed.get());
+
+    let text_box: Box<string> = Box {
+        value: "hi"
+    };
+    println(text_box.get());
+    println(text_box.replace("bye").get());
+
+    println(identity(7));
+    println(identity("text"));
+
+    let numbers = make_pair(1, 2);
+    println(numbers.first + numbers.second);
+
+    let mixed: Pair<int, string> = Pair {
+        first: 5,
+        second: "x"
+    };
+    println(mixed.first);
+
+    let nested: Box<Box<int>> = Box {
+        value: Box {
+            value: 3
+        }
+    };
+    println(nested.value.value);
+
+    return 0;
+}

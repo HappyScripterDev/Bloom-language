@@ -1,0 +1,10 @@
+fn main() -> int {
+    let language: string = "Bloom";
+    let version: int = 1;
+
+    println("Programming language: " + language);
+    println("Version:");
+    println(version);
+
+    return 0;
+}

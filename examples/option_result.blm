@@ -1,0 +1,51 @@
+fn divide(a: int, b: int) -> Result<int, string> {
+    if b == 0 {
+        return Result::Err("division by zero");
+    }
+    return Result::Ok(a / b);
+}
+
+fn describe(r: Result<int, string>) -> string {
+    return match r {
+        Result::Ok(value) => "ok: " + str(value),
+        Result::Err(message) => "error: " + message
+    };
+}
+
+fn first_positive(xs: [int]) -> Option<int> {
+    for i in 0..len(xs) {
+        if xs[i] > 0 {
+            return Option::Some(xs[i]);
+        }
+    }
+    return Option::None;
+}
+
+fn unwrap_or(o: Option<int>, fallback: int) -> int {
+    return match o {
+        Option::Some(v) => v,
+        Option::None => fallback
+    };
+}
+
+fn main() -> int {
+    println(describe(divide(10, 2)));
+    println(describe(divide(10, 0)));
+
+    let found = first_positive([0, -3, 7, 9]);
+    let missing = first_positive([0, -3]);
+    println(unwrap_or(found, -1));
+    println(unwrap_or(missing, -1));
+
+    let nested: Option<Option<int>> = Option::Some(Option::Some(42));
+    let value = match nested {
+        Option::Some(inner) => match inner {
+            Option::Some(v) => v,
+            Option::None => 0
+        },
+        Option::None => 0
+    };
+    println(value);
+
+    return 0;
+}

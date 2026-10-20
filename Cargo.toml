@@ -1,0 +1,14 @@
+[package]
+name = "bloom"
+version = "0.14.0"
+edition = "2021"
+description = "The Bloom programming language compiler (compiles .blm to C and then to native code)"
+license = "MIT"
+
+[[bin]]
+name = "bloom"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1

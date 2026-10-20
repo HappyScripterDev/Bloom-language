@@ -1,0 +1,57 @@
+// Pfad- und Query-Parameter auswerten (std::web + std::json).
+// Rein lokal: keine Netzwerkverbindung nötig.
+use std::web;
+use std::json;
+
+fn param(m: web::Match, key: string) -> string {
+    return match json::get_string(m.params, key) {
+        Result::Ok(v) => v,
+        Result::Err(e) => "(fehlt)"
+    };
+}
+
+fn show_article(m: web::Match) -> void {
+    println("route:    " + m.name);
+    println("category: " + param(m, "category"));
+    println("slug:     " + param(m, "slug"));
+    println("page:     " + param(m, "page"));
+    println("sort:     " + param(m, "sort"));
+    println("draft:    [" + param(m, "draft") + "]");
+}
+
+fn show_encoded(m: web::Match) -> void {
+    println("category: " + param(m, "category"));
+    println("slug:     " + param(m, "slug"));
+    println("q:        " + param(m, "q"));
+}
+
+fn show_search(m: web::Match) -> void {
+    println("q:        " + param(m, "q"));
+    println("limit:    " + param(m, "limit"));
+}
+
+fn main() -> int {
+    let router = web::router();
+    web::route(router, "GET", "/articles/:category/:slug", "article");
+    web::route(router, "GET", "/search", "search");
+
+    match web::resolve(router, "GET", "/articles/rust/ownership?page=2&sort=desc&draft") {
+        Result::Ok(m) => show_article(m),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+
+    // Prozentkodierung: %2F bleibt innerhalb eines Segments, + wird zum Leerzeichen
+    println("---");
+    match web::resolve(router, "GET", "/articles/a%2Fb/c%20d?q=hello+world") {
+        Result::Ok(m) => show_encoded(m),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+
+    // Query-Parameter auch ohne Pfadparameter; wiederholte Schlüssel: der erste gewinnt
+    println("---");
+    match web::resolve(router, "GET", "/search?q=bloom&q=sprache&limit=10") {
+        Result::Ok(m) => show_search(m),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}

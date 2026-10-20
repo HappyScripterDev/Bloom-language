@@ -1,0 +1,42 @@
+// Routen registrieren und Anfragen auflösen (std::web).
+// Rein lokal: keine Netzwerkverbindung nötig.
+use std::web;
+
+fn show_bool(r: Result<bool, string>) -> string {
+    return match r {
+        Result::Ok(v) => "registriert",
+        Result::Err(e) => "FEHLER: " + e
+    };
+}
+
+fn show_match(r: Result<web::Match, string>) -> string {
+    return match r {
+        Result::Ok(m) => "status " + str(m.status) + " route=" + m.name + " allow=" + m.allow,
+        Result::Err(e) => "FEHLER: " + e
+    };
+}
+
+fn main() -> int {
+    let router = web::router();
+    println(show_bool(web::route(router, "GET", "/", "home")));
+    println(show_bool(web::route(router, "GET", "/users", "list_users")));
+    println(show_bool(web::route(router, "POST", "/users", "create_user")));
+    println(show_bool(web::route(router, "GET", "/users/me", "profile")));
+    println(show_bool(web::route(router, "GET", "/users/:id", "show_user")));
+    println("---");
+    println(show_match(web::resolve(router, "GET", "/")));
+    println(show_match(web::resolve(router, "GET", "/users")));
+    println(show_match(web::resolve(router, "POST", "/users")));
+    // Feste Segmente haben Vorrang vor :param
+    println(show_match(web::resolve(router, "GET", "/users/me")));
+    println(show_match(web::resolve(router, "GET", "/users/42")));
+    // Bekannter Pfad, andere Methode -> 405 mit Allow
+    println(show_match(web::resolve(router, "DELETE", "/users")));
+    // Unbekannter Pfad -> 404
+    println(show_match(web::resolve(router, "GET", "/missing")));
+    println("---");
+    // Widersprüchliche Registrierungen werden abgelehnt
+    println(show_bool(web::route(router, "GET", "/users/:other", "duplicate")));
+    println(show_bool(web::route(router, "GET", "/users/me", "duplicate2")));
+    return 0;
+}

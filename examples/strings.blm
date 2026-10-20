@@ -1,0 +1,23 @@
+fn main() -> int {
+    let name = "Bloom";
+    let greeting = "Hello, " + name + "!";
+
+    println(greeting);
+    println(len(greeting));
+
+    let first: char = greeting[0];
+    println(first);
+    if first == 'H' {
+        println("starts with H");
+    }
+
+    let snowman = "Snowman: \u{2603}";
+    println(snowman);
+    println(len(snowman));
+
+    for i in 0..len(greeting) {
+        println(greeting[i]);
+    }
+
+    return 0;
+}

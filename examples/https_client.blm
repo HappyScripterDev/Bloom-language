@@ -1,0 +1,25 @@
+// HTTPS-Client: holt https://<host>:<port>/... über eine validierte
+// TLS-Verbindung (Windows Schannel, Zertifikat wird geprüft — es gibt
+// keinen unsicheren Modus). Host:Port und den Pfad zum CA-Zertifikat
+// (PEM oder DER) interaktiv eingeben.
+use std::http;
+
+fn show(r: http::HttpResponse) -> string {
+    return "Status: " + str(r.status) + " " + r.reason + "\n" +
+        "Content-Type: " + match http::header_get(r.headers, "content-type") {
+            Option::Some(v) => v,
+            Option::None => "(fehlt)"
+        } + "\n" +
+        "Body: " + r.body;
+}
+
+fn main() -> int {
+    let target = input("Host:Port: ");
+    let ca = input("CA-Zertifikat (PEM/DER): ");
+    let url = "https://" + target + "/demo";
+    println(match http::get_with_ca(url, ca) {
+        Result::Ok(r) => show(r),
+        Result::Err(e) => "FEHLER: " + e
+    });
+    return 0;
+}

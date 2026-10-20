@@ -1,0 +1,4 @@
+fn main() -> int {
+    let age: int = "hello";
+    return 0;
+}
