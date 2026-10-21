@@ -541,6 +541,77 @@ für HEAD-Requests.
 Beispiele: `examples/web_router.blm`, `examples/web_json_api.blm`,
 `examples/web_static_files.blm`, `examples/web_html_site.blm`.
 
+## 16a. Formulare
+
+Formulardaten kommen als `application/x-www-form-urlencoded` an, also
+Text wie `q=bloom+forms&lang=de&lang=en`.
+
+```bloom
+use std::web;
+
+fn run() -> Result<int, string> {
+    let form = web::form_body("q=bloom+forms&lang=de&lang=en")?;
+
+    // Ein Wert, der genau einmal vorkommt
+    let q = web::form_get(form, "q")?;
+    println("Suche: " + q);
+
+    // Mehrere Werte (Checkbox-Gruppe)
+    let languages = web::form_values(form, "lang");
+    println("Sprachen: " + join(languages, ", "));
+
+    // Erster Wert oder None
+    match web::form_first(form, "q") {
+        Option::Some(v) => println("erster Treffer: " + v),
+        Option::None => println("kein q")
+    };
+
+    // Existiert das Feld überhaupt?
+    println(str(web::form_has(form, "q")));
+    println(str(web::form_count(form)));
+    return Result::Ok(0);
+}
+```
+
+Wichtig beim Auslesen:
+
+- `form_get` liefert `Err`, wenn das Feld fehlt **oder** mehrfach
+  vorkommt. Wer den ersten von mehreren Werten will, nimmt
+  `form_first` und sagt damit, was er meint.
+- Ein vorhandenes Feld mit leerem Wert (`leer=`) ist `Ok("")`, ein
+  fehlendes Feld ist `Err`. Das ist ein Unterschied.
+- `form_values` gibt alle Werte in Request-Reihenfolge zurück,
+  `form_names` die verschiedenen Namen in der Reihenfolge des ersten
+  Auftretens.
+
+In einem Server nimmst du `form_body_request`, dann prüft Bloom auch
+den Content-Type:
+
+```bloom
+match web::form_body_request(request) {
+    Result::Ok(form) => handle(form),
+    Result::Err(e) => send_error(conn, 400, e)
+};
+```
+
+Um Formulardaten wieder zu verschicken oder zu speichern, gibt es
+`web::form_encode`. Es kodiert Leerzeichen als `+` und alles andere
+Nötige als `%XX`; Parse → Encode → Parse ergibt dieselben Einträge in
+derselben Reihenfolge.
+
+Limits: Body 1 MiB, 4096 Einträge, Name 256 Bytes, Wert 64 KiB.
+Ungültige Prozentkodierung wie `%`, `%0` oder `%GG` und ungültiges
+UTF-8 sind Fehler. Der Parser repariert nichts stillschweigend.
+
+Und ganz wichtig: Dekodieren ist **keine** Validierung und keine
+Autorisierung. Formularwerte sind Eingaben von außen. Prüfe sie selbst,
+und lass sie durch die Template-Engine escapen, wenn du sie ausgibst.
+CSRF-Schutz, Sessions und Login musst du selbst bauen.
+
+Beispiele: `examples/form_parse.blm`,
+`examples/form_multiple_values.blm`, `examples/form_encode.blm`,
+`examples/web_form_server.blm`, `examples/web_form_errors.blm`.
+
 ## 17. HTTPS
 
 ```bloom

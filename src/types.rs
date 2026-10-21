@@ -99,6 +99,10 @@ pub enum Type {
     /// Managed like `Type::Json`; the handle lives inside the built-in
     /// `std::fs::Bytes` struct.
     Bytes,
+    /// Internal handle to reference-counted form data (`std::web::FormData`).
+    /// Managed like `Type::Json`; the handle lives inside the built-in
+    /// `std::web::FormData` struct.
+    Form,
 }
 
 impl Type {
@@ -165,6 +169,7 @@ pub fn mangle_type(ty: &Type) -> String {
         Type::Web => "web".to_string(),
         Type::Html => "html".to_string(),
         Type::Bytes => "bytes".to_string(),
+        Type::Form => "form".to_string(),
         Type::Param(name) => c_ident(name),
     }
 }
@@ -185,6 +190,7 @@ impl fmt::Display for Type {
             Type::Web => write!(f, "std::web::Router"),
             Type::Html => write!(f, "std::html::Template"),
             Type::Bytes => write!(f, "std::fs::Bytes"),
+            Type::Form => write!(f, "std::web::FormData"),
             Type::Struct(name, args) => {
                 if args.is_empty() {
                     write!(f, "{}", name)
@@ -203,5 +209,21 @@ impl fmt::Display for Type {
             }
             Type::Param(name) => write!(f, "{}", name),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn form_type_is_displayed_and_mangled() {
+        assert_eq!(Type::Form.to_string(), "std::web::FormData");
+        assert_eq!(mangle_type(&Type::Form), "form");
+    }
+
+    #[test]
+    fn form_type_is_named_like_the_other_managed_handles() {
+        assert_eq!(Type::Form.to_string().split("::").last(), Some("FormData"));
     }
 }

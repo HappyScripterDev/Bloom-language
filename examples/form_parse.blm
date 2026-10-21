@@ -1,0 +1,49 @@
+// URL-kodierte Formulardaten parsen (std::web).
+// Zeigt: mehrere Felder, + als Leerzeichen, Prozentdekodierung und der
+// Unterschied zwischen fehlendem Feld und vorhandenem Feld mit leerem Wert.
+use std::web;
+
+fn show(form: web::FormData, name: string) -> void {
+    let values = web::form_values(form, name);
+    if len(values) == 0 {
+        println(name + ": (fehlt)");
+        return;
+    }
+    var i = 0;
+    while i < len(values) {
+        println(name + ": [" + values[i] + "]");
+        i = i + 1;
+    }
+}
+
+fn run() -> Result<int, string> {
+    let form = web::form_body("q=bloom+forms&page=2&sort=asc&leer=&u=%C3%A4")?;
+    println("Einträge: " + str(web::form_count(form)));
+    show(form, "q");
+    show(form, "page");
+    show(form, "sort");
+    show(form, "leer");
+    show(form, "gibt_es_nicht");
+
+    match web::form_get(form, "q") {
+        Result::Ok(v) => println("genau ein q: " + v),
+        Result::Err(e) => println("form_get: " + e)
+    };
+    match web::form_first(form, "page") {
+        Option::Some(v) => println("erster page-Wert: " + v),
+        Option::None => println("kein page-Wert")
+    };
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}

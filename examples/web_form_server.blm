@@ -1,0 +1,118 @@
+// Kleiner Formular-Server: GET / zeigt ein HTML-Formular, POST /submit
+// parst den URL-kodierten Body und rendert eine Ergebnis-Seite.
+// Startet auf einem freien Port, gibt ihn aus und beendet sich nach
+// 5 Anfragen.
+use std::web;
+use std::http;
+use std::json;
+use std::html;
+use std::net;
+
+fn send_text(conn: int, status: int, text: string) -> void {
+    match http::write_response(conn, status, "text/plain; charset=utf-8", text) {
+        Result::Ok(_) => println("Antwort gesendet: " + str(status)),
+        Result::Err(e) => println("Schreibfehler: " + e)
+    };
+}
+
+fn render_form(conn: int, tmpl: html::Template) -> void {
+    let data = json::make_object();
+    match html::render_page(conn, 200, tmpl, data) {
+        Result::Ok(_) => println("Formular gesendet"),
+        Result::Err(e) => println("Renderfehler: " + e)
+    };
+}
+
+fn query_text(form: web::FormData) -> string {
+    return match web::form_first(form, "q") {
+        Option::Some(v) => v,
+        Option::None => ""
+    };
+}
+
+fn languages_text(form: web::FormData) -> string {
+    let values = web::form_values(form, "lang");
+    if len(values) == 0 {
+        return "(keine)";
+    }
+    return join(values, ", ");
+}
+
+fn render_result(conn: int, tmpl: html::Template, form: web::FormData) -> void {
+    let data = json::make_object();
+    json::set(data, "q", json::make_string(query_text(form)));
+    json::set(data, "langs", json::make_string(languages_text(form)));
+    json::set(data, "count", json::make_int(web::form_count(form)));
+    match html::render_page(conn, 200, tmpl, data) {
+        Result::Ok(_) => println("Ergebnis gesendet"),
+        Result::Err(e) => println("Renderfehler: " + e)
+    };
+}
+
+fn handle_submit(conn: int, request: http::HttpRequest, tmpl: html::Template) -> void {
+    match web::form_body_request(request) {
+        Result::Ok(form) => render_result(conn, tmpl, form),
+        Result::Err(e) => send_text(conn, 400, "Formularfehler: " + e)
+    };
+}
+
+fn handle(conn: int, request: http::HttpRequest, form_tmpl: html::Template, result_tmpl: html::Template) -> void {
+    if request.method == "POST" {
+        if request.target == "/submit" {
+            handle_submit(conn, request, result_tmpl);
+        } else {
+            send_text(conn, 404, "not found");
+        }
+    } else if request.target == "/" {
+        render_form(conn, form_tmpl);
+    } else {
+        send_text(conn, 404, "not found");
+    }
+}
+
+fn run() -> Result<int, string> {
+    let form_src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Bloom-Suche</title></head>" +
+        "<body><h1>Suche</h1>" +
+        "<form method=\"post\" action=\"/submit\">" +
+        "<p><input name=\"q\" placeholder=\"Suchbegriff\"></p>" +
+        "<p><label><input type=\"checkbox\" name=\"lang\" value=\"de\"> Deutsch</label> " +
+        "<label><input type=\"checkbox\" name=\"lang\" value=\"en\"> English</label></p>" +
+        "<p><button type=\"submit\">Suchen</button></p>" +
+        "</form></body></html>";
+    let result_src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Ergebnis</title></head>" +
+        "<body><h1>Ergebnis</h1>" +
+        "<p>Suchbegriff: {{q}}</p>" +
+        "<p>Sprachen: {{langs}}</p>" +
+        "<p>Einträge: {{count}}</p>" +
+        "<p><a href=\"/\">zurück</a></p></body></html>";
+    let form_tmpl = html::template(form_src)?;
+    let result_tmpl = html::template(result_src)?;
+
+    let listener = net::tcp_listen("127.0.0.1", 0, 8)?;
+    println(net::local_port(listener)?);
+    println("Formular-Server bereit");
+    var i = 0;
+    while i < 5 {
+        let conn = net::tcp_accept(listener)?;
+        match http::read_request(conn) {
+            Result::Ok(request) => handle(conn, request, form_tmpl, result_tmpl),
+            Result::Err(e) => println("Lesefehler: " + e)
+        };
+        net::tcp_close(conn);
+        i = i + 1;
+    }
+    net::tcp_close(listener);
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}

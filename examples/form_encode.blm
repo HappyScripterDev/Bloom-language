@@ -1,0 +1,45 @@
+// Formulardaten wieder URL-kodieren (std::web::form_encode).
+// Parse -> Encode -> Parse ergibt dieselben Einträge in derselben
+// Reihenfolge (Round-trip).
+use std::web;
+
+fn describe(form: web::FormData) -> string {
+    var out = "";
+    let names = web::form_names(form);
+    var i = 0;
+    while i < len(names) {
+        let values = web::form_values(form, names[i]);
+        var k = 0;
+        while k < len(values) {
+            out = out + names[i] + "=[" + values[k] + "] ";
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    return trim(out);
+}
+
+fn run() -> Result<int, string> {
+    let form = web::form_body("q=c++&note=Gr%C3%BC%C3%9Fe+aus+Bloom&q=zweite+Suche")?;
+    println("vorher:  " + describe(form));
+
+    let encoded = web::form_encode(form)?;
+    println("kodiert: " + encoded);
+
+    let again = web::form_body(encoded)?;
+    println("nachher: " + describe(again));
+    println("gleich:  " + str(describe(form) == describe(again)));
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}

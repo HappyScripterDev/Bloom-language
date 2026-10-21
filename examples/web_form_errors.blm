@@ -1,0 +1,73 @@
+// Fehlerfälle beim Formular-Parsen über HTTP.
+// Zeigt die Zuordnung: 415 falscher/fehlender Content-Type, 413 zu großer
+// Body, 400 kaputte Kodierung, 200 gültiges Formular.
+use std::web;
+use std::http;
+use std::net;
+
+fn status_for(e: string) -> int {
+    if contains(e, "missing Content-Type") {
+        return 415;
+    }
+    if contains(e, "unsupported Content-Type") {
+        return 415;
+    }
+    if contains(e, "charset") {
+        return 415;
+    }
+    if contains(e, "exceeds 1048576") {
+        return 413;
+    }
+    return 400;
+}
+
+fn send_text(conn: int, status: int, text: string) -> void {
+    match http::write_response(conn, status, "text/plain; charset=utf-8", text) {
+        Result::Ok(_) => println("Status " + str(status)),
+        Result::Err(e) => println("Schreibfehler: " + e)
+    };
+}
+
+fn handle(conn: int, request: http::HttpRequest) -> void {
+    if request.method != "POST" {
+        match http::write_response_full(conn, 405, "text/plain; charset=utf-8", "Allow: POST", "method not allowed") {
+            Result::Ok(_) => println("Status 405"),
+            Result::Err(e) => println("Schreibfehler: " + e)
+        };
+        return;
+    }
+    match web::form_body_request(request) {
+        Result::Ok(form) => send_text(conn, 200, "ok:" + str(web::form_count(form))),
+        Result::Err(e) => send_text(conn, status_for(e), "error: " + e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let listener = net::tcp_listen("127.0.0.1", 0, 8)?;
+    println(net::local_port(listener)?);
+    println("Formular-Fehlerserver bereit");
+    var i = 0;
+    while i < 8 {
+        let conn = net::tcp_accept(listener)?;
+        match http::read_request(conn) {
+            Result::Ok(request) => handle(conn, request),
+            Result::Err(e) => println("Lesefehler: " + e)
+        };
+        net::tcp_close(conn);
+        i = i + 1;
+    }
+    net::tcp_close(listener);
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}

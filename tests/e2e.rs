@@ -6523,7 +6523,7 @@ fn spawn_example_server(
     u16,
     std::io::BufReader<std::process::ChildStdout>,
 )> {
-    use std::io::{BufRead, BufReader};
+    use std::io::BufReader;
 
     let exe = dir.join(if cfg!(windows) {
         exe_name.to_string() + ".exe"
@@ -6549,16 +6549,7 @@ fn spawn_example_server(
         .spawn()
         .expect("spawn server");
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
-    let mut port_line = String::new();
-    let port: u16 = loop {
-        port_line.clear();
-        let n = reader.read_line(&mut port_line).expect("port");
-        assert!(n > 0, "server exited before printing its port");
-        let text = port_line.trim();
-        if let Ok(p) = text.parse::<u16>() {
-            break p;
-        }
-    };
+    let port = read_port(&mut reader);
     Some((child, port, reader))
 }
 
@@ -6850,5 +6841,523 @@ fn web_static_errors_example_natively() {
         !dir.join("bloom_static_errors_demo").exists(),
         "cleanup failed"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn read_port(reader: &mut std::io::BufReader<std::process::ChildStdout>) -> u16 {
+    use std::io::BufRead;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).expect("port");
+        assert!(n > 0, "server exited before printing its port");
+        if let Ok(port) = line.trim().parse::<u16>() {
+            return port;
+        }
+    }
+}
+
+fn raw_request(
+    port: u16,
+    method: &str,
+    target: &str,
+    content_type: Option<&str>,
+    body: &[u8],
+) -> Vec<u8> {
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    let mut head = format!(
+        "{method} {target} HTTP/1.1\r\nHost: bloom\r\nContent-Length: {}\r\nConnection: close\r\n",
+        body.len()
+    );
+    if let Some(ct) = content_type {
+        head.push_str(&format!("Content-Type: {ct}\r\n"));
+    }
+    head.push_str("\r\n");
+    stream.write_all(head.as_bytes()).expect("write head");
+    stream.write_all(body).expect("write body");
+    let mut response = Vec::new();
+    use std::io::Read;
+    stream.read_to_end(&mut response).expect("read");
+    response
+}
+
+#[test]
+fn form_body_parse_natively() {
+    let dir = temp_dir("form-parse");
+    write_file(
+        &dir.join("big.txt"),
+        &format!("a={}", "x".repeat(1024 * 1024 + 1)),
+    );
+    write_file(&dir.join("many.txt"), &"a=1&".repeat(4097));
+    write_file(&dir.join("longname.txt"), &format!("{}=v", "n".repeat(257)));
+    write_file(
+        &dir.join("longvalue.txt"),
+        &format!("v={}", "v".repeat(65537)),
+    );
+    let src = r#"use std::web;
+use std::fs;
+
+fn inspect(form: web::FormData) -> void {
+    println("count=" + str(web::form_count(form)));
+    let names = web::form_names(form);
+    var i = 0;
+    while i < len(names) {
+        let values = web::form_values(form, names[i]);
+        var k = 0;
+        while k < len(values) {
+            println("E|" + names[i] + "|" + values[k] + "|");
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+}
+
+fn get_case(form: web::FormData, name: string) -> void {
+    match web::form_get(form, name) {
+        Result::Ok(v) => println("G|" + name + "|ok|" + v + "|"),
+        Result::Err(e) => println("G|" + name + "|err|" + e + "|")
+    };
+}
+
+fn first_case(form: web::FormData, name: string) -> void {
+    match web::form_first(form, name) {
+        Option::Some(v) => println("F|" + name + "|some|" + v + "|"),
+        Option::None => println("F|" + name + "|none||")
+    };
+}
+
+fn parse_ok(form: web::FormData) -> void {
+    inspect(form);
+    get_case(form, "a");
+    get_case(form, "empty");
+    get_case(form, "missing");
+    first_case(form, "a");
+    first_case(form, "missing");
+    println("H|empty|" + str(web::form_has(form, "empty")) + "|");
+    println("H|missing|" + str(web::form_has(form, "missing")) + "|");
+}
+
+fn parse(body: string) -> void {
+    match web::form_body(body) {
+        Result::Ok(form) => parse_ok(form),
+        Result::Err(e) => println("ERR|" + e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    parse("a=1&b=hello+world&a=2&empty=&=x&flag&c=%41%42&u=%C3%A4");
+    parse("");
+    parse("&&=&");
+    parse("a=%");
+    parse("a=%0");
+    parse("a=%GG");
+    parse("a=%FF");
+    parse(fs::read_text("@BIG@")?);
+    parse(fs::read_text("@MANY@")?);
+    parse(fs::read_text("@LONGNAME@")?);
+    parse(fs::read_text("@LONGVALUE@")?);
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => 1
+    };
+}
+"#
+    .replace(
+        "@BIG@",
+        &dir.join("big.txt").to_string_lossy().replace('\\', "\\\\"),
+    )
+    .replace(
+        "@MANY@",
+        &dir.join("many.txt").to_string_lossy().replace('\\', "\\\\"),
+    )
+    .replace(
+        "@LONGNAME@",
+        &dir.join("longname.txt")
+            .to_string_lossy()
+            .replace('\\', "\\\\"),
+    )
+    .replace(
+        "@LONGVALUE@",
+        &dir.join("longvalue.txt")
+            .to_string_lossy()
+            .replace('\\', "\\\\"),
+    );
+    let file = dir.join("main.blm");
+    write_file(&file, &src);
+    let out = run_bloom_env(
+        &["run", file.to_string_lossy().as_ref()],
+        &[("BLOOM_MEM_REPORT", "1")],
+    );
+    if no_toolchain(&out) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(out.code, 0, "{}", out.combined());
+    let stdout = norm(&out.stdout);
+
+    assert!(stdout.contains("count=8\n"), "{stdout}");
+    assert!(stdout.contains("E|a|1|\nE|a|2|\n"), "{stdout}");
+    assert!(stdout.contains("E|b|hello world|\n"), "{stdout}");
+    assert!(stdout.contains("E|empty||\nE||x|\nE|flag||\n"), "{stdout}");
+    assert!(stdout.contains("E|c|AB|\nE|u|ä|\n"), "{stdout}");
+    assert!(
+        stdout.contains("G|a|err|form_get: field has multiple values|\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("G|empty|ok||\n"), "{stdout}");
+    assert!(
+        stdout.contains("G|missing|err|form_get: field not found|\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("F|a|some|1|\n"), "{stdout}");
+    assert!(stdout.contains("F|missing|none||\n"), "{stdout}");
+    assert!(
+        stdout.contains("H|empty|true|\nH|missing|false|\n"),
+        "{stdout}"
+    );
+
+    // Empty body: a valid, empty form. "&&=&" yields one empty-name entry.
+    assert!(stdout.contains("count=0\n"), "{stdout}");
+    assert!(stdout.contains("E|||\n"), "{stdout}");
+
+    assert_eq!(
+        stdout
+            .matches("ERR|form_body: invalid percent-encoding in field value")
+            .count(),
+        3,
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ERR|form_body: invalid UTF-8 in decoded field value"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ERR|form_body: form body exceeds 1048576 bytes"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ERR|form_body: too many form entries (max 4096)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ERR|form_body: field name exceeds 256 bytes"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ERR|form_body: field value exceeds 65536 bytes"),
+        "{stdout}"
+    );
+    assert!(
+        out.stderr.contains("live allocations: 0"),
+        "{}",
+        out.combined()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn form_encode_roundtrip_natively() {
+    let dir = temp_dir("form-encode");
+    let src = r#"use std::web;
+
+fn same(a: web::FormData, b: web::FormData) -> bool {
+    if web::form_count(a) != web::form_count(b) {
+        return false;
+    }
+    let na = web::form_names(a);
+    let nb = web::form_names(b);
+    if len(na) != len(nb) {
+        return false;
+    }
+    var i = 0;
+    while i < len(na) {
+        if na[i] != nb[i] {
+            return false;
+        }
+        let va = web::form_values(a, na[i]);
+        let vb = web::form_values(b, nb[i]);
+        if len(va) != len(vb) {
+            return false;
+        }
+        var k = 0;
+        while k < len(va) {
+            if va[k] != vb[k] {
+                return false;
+            }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn reparse(form: web::FormData, text: string) -> void {
+    match web::form_body(text) {
+        Result::Ok(again) => println("same=" + str(same(form, again))),
+        Result::Err(e) => println("reparse-err=" + e)
+    };
+}
+
+fn encoded(form: web::FormData, expected: string) -> void {
+    match web::form_encode(form) {
+        Result::Ok(text) => println("match=" + str(text == expected)),
+        Result::Err(e) => println("encode-err=" + e)
+    };
+}
+
+fn check(form: web::FormData, expected: string) -> void {
+    match web::form_encode(form) {
+        Result::Ok(text) => reparse(form, text),
+        Result::Err(e) => println("encode-err=" + e)
+    };
+    match web::form_encode(form) {
+        Result::Ok(text) => println("enc=" + text),
+        Result::Err(e) => println("encode-err=" + e)
+    };
+    match web::form_encode(form) {
+        Result::Ok(text) => println("match=" + str(text == expected)),
+        Result::Err(e) => println("encode-err=" + e)
+    };
+}
+
+fn parse(body: string, expected: string) -> void {
+    match web::form_body(body) {
+        Result::Ok(form) => check(form, expected),
+        Result::Err(e) => println("parse-err=" + e)
+    };
+}
+
+fn main() -> int {
+    parse("q=c++&note=Gr%C3%BC%C3%9Fe+aus+Bloom&q=zweite+Suche", "q=c++&note=Gr%C3%BC%C3%9Fe+aus+Bloom&q=zweite+Suche");
+    parse("empty=&=x&&flag", "empty=&=x&flag=");
+    parse("a=%26%3D%25&b=a%20b", "a=%26%3D%25&b=a+b");
+    parse("%C3%A4=1", "%C3%A4=1");
+    parse("", "");
+    return 0;
+}
+"#;
+    let file = dir.join("main.blm");
+    write_file(&file, src);
+    let out = run_bloom_env(
+        &["run", file.to_string_lossy().as_ref()],
+        &[("BLOOM_MEM_REPORT", "1")],
+    );
+    if no_toolchain(&out) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(out.code, 0, "{}", out.combined());
+    let stdout = norm(&out.stdout);
+    assert_eq!(stdout.matches("same=true").count(), 5, "{stdout}");
+    assert_eq!(stdout.matches("match=true").count(), 5, "{stdout}");
+    assert!(stdout.contains("enc=empty=&=x&flag=\n"), "{stdout}");
+    assert!(stdout.contains("enc=a=%26%3D%25&b=a+b\n"), "{stdout}");
+    assert!(stdout.contains("enc=%C3%A4=1\n"), "{stdout}");
+    assert!(
+        out.stderr.contains("live allocations: 0"),
+        "{}",
+        out.combined()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn web_form_server_natively() {
+    use std::io::Read;
+
+    let dir = temp_dir("web-form-server");
+    let (mut child, port, mut reader) =
+        match spawn_example_server(&dir, "web_form_server.blm", "web_form_server") {
+            Some(v) => v,
+            None => return,
+        };
+
+    let r1 = raw_request(port, "GET", "/", None, b"");
+    let (head1, body1) = split_http_response(&r1);
+    assert!(head1.starts_with("HTTP/1.1 200 OK\r\n"), "{head1}");
+    assert!(head1.contains("text/html"), "{head1}");
+    assert!(String::from_utf8_lossy(&body1).contains("<form method=\"post\""));
+
+    let client = dir.join("client.blm");
+    write_file(
+        &client,
+        r#"use std::http;
+
+fn show(r: http::HttpResponse) -> void {
+    println(str(r.status));
+    print(r.body);
+}
+
+fn main() -> int {
+    let port = trim(input(""));
+    let url = "http://127.0.0.1:" + port + "/submit";
+    match http::post(url, "application/x-www-form-urlencoded", "q=bloom+forms&lang=de&lang=en") {
+        Result::Ok(r) => show(r),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}
+"#,
+    );
+    let client_out = run_bloom_stdin_env(
+        &["run", client.to_string_lossy().as_ref()],
+        &format!("{port}\n"),
+        &[("BLOOM_MEM_REPORT", "1")],
+    );
+    assert_eq!(client_out.code, 0, "{}", client_out.combined());
+    let client_stdout = norm(&client_out.stdout);
+    assert!(client_stdout.starts_with("200\n"), "{client_stdout}");
+    assert!(
+        client_stdout.contains("Suchbegriff: bloom forms"),
+        "{client_stdout}"
+    );
+    assert!(
+        client_stdout.contains("Sprachen: de, en"),
+        "{client_stdout}"
+    );
+    assert!(client_stdout.contains("Einträge: 3"), "{client_stdout}");
+    assert!(
+        client_out.stderr.contains("live allocations: 0"),
+        "{}",
+        client_out.combined()
+    );
+
+    let r3 = raw_request(
+        port,
+        "POST",
+        "/submit",
+        Some("application/x-www-form-urlencoded"),
+        b"q=%zz",
+    );
+    let (head3, body3) = split_http_response(&r3);
+    assert!(head3.starts_with("HTTP/1.1 400 "), "{head3}");
+    assert!(
+        String::from_utf8_lossy(&body3).contains("invalid percent-encoding"),
+        "{head3}"
+    );
+
+    let r4 = raw_request(port, "POST", "/submit", None, b"q=x");
+    let (head4, _) = split_http_response(&r4);
+    assert!(head4.starts_with("HTTP/1.1 400 "), "{head4}");
+
+    let r5 = raw_request(port, "GET", "/", None, b"");
+    let (head5, _) = split_http_response(&r5);
+    assert!(head5.starts_with("HTTP/1.1 200 OK\r\n"), "{head5}");
+
+    let status = child.wait().expect("wait");
+    let mut rest = String::new();
+    reader.read_to_string(&mut rest).expect("rest");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("stderr read");
+    assert_eq!(status.code(), Some(0), "{rest}\n{stderr}");
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    assert!(stderr.contains("live sockets: 0"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn web_form_errors_natively() {
+    use std::io::Read;
+
+    let dir = temp_dir("web-form-errors");
+    let (mut child, port, mut reader) =
+        match spawn_example_server(&dir, "web_form_errors.blm", "web_form_errors") {
+            Some(v) => v,
+            None => return,
+        };
+
+    let r1 = raw_request(
+        port,
+        "POST",
+        "/",
+        Some("application/x-www-form-urlencoded"),
+        b"a=1&b=2",
+    );
+    let (head1, body1) = split_http_response(&r1);
+    assert!(head1.starts_with("HTTP/1.1 200 OK\r\n"), "{head1}");
+    assert_eq!(body1, b"ok:2".to_vec());
+
+    let r2 = raw_request(port, "POST", "/", Some("application/json"), b"{}");
+    let (head2, _) = split_http_response(&r2);
+    assert!(head2.starts_with("HTTP/1.1 415 "), "{head2}");
+    assert!(head2.contains("Unsupported Media Type"), "{head2}");
+
+    let r3 = raw_request(port, "POST", "/", None, b"a=1");
+    let (head3, _) = split_http_response(&r3);
+    assert!(head3.starts_with("HTTP/1.1 415 "), "{head3}");
+
+    let r4 = raw_request(
+        port,
+        "POST",
+        "/",
+        Some("application/x-www-form-urlencoded"),
+        b"a=%G0",
+    );
+    let (head4, _) = split_http_response(&r4);
+    assert!(head4.starts_with("HTTP/1.1 400 "), "{head4}");
+
+    let big = format!("a={}", "x".repeat(1024 * 1024 + 1));
+    let r5 = raw_request(
+        port,
+        "POST",
+        "/",
+        Some("application/x-www-form-urlencoded"),
+        big.as_bytes(),
+    );
+    let (head5, body5) = split_http_response(&r5);
+    assert!(head5.starts_with("HTTP/1.1 413 "), "{head5}");
+    assert!(
+        String::from_utf8_lossy(&body5).contains("exceeds 1048576"),
+        "{head5}"
+    );
+
+    let r6 = raw_request(
+        port,
+        "POST",
+        "/",
+        Some("application/x-www-form-urlencoded; charset=UTF-8"),
+        b"a=1",
+    );
+    let (head6, body6) = split_http_response(&r6);
+    assert!(head6.starts_with("HTTP/1.1 200 OK\r\n"), "{head6}");
+    assert_eq!(body6, b"ok:1".to_vec());
+
+    let r7 = raw_request(
+        port,
+        "POST",
+        "/",
+        Some("application/x-www-form-urlencoded; charset=iso-8859-1"),
+        b"a=1",
+    );
+    let (head7, _) = split_http_response(&r7);
+    assert!(head7.starts_with("HTTP/1.1 415 "), "{head7}");
+
+    let r8 = raw_request(port, "GET", "/", None, b"");
+    let (head8, _) = split_http_response(&r8);
+    assert!(head8.starts_with("HTTP/1.1 405 "), "{head8}");
+    assert!(head8.contains("Allow: POST"), "{head8}");
+
+    let status = child.wait().expect("wait");
+    let mut rest = String::new();
+    reader.read_to_string(&mut rest).expect("rest");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("stderr read");
+    assert_eq!(status.code(), Some(0), "{rest}\n{stderr}");
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    assert!(stderr.contains("live sockets: 0"), "{stderr}");
     let _ = std::fs::remove_dir_all(&dir);
 }

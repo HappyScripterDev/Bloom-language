@@ -61,6 +61,12 @@ typedef int64_t bloom_html_handle;
 typedef int64_t bloom_fs_handle;
 
 /*
+ * Handle to reference-counted form data (std::web::FormData); implemented in
+ * bloom_web.c.
+ */
+typedef int64_t bloom_form_handle;
+
+/*
  * Calling convention for `extern "system"` declarations. On 32-bit Windows
  * this is `__stdcall`; on x64 and other targets it is the default
  * convention (the macro is empty there).

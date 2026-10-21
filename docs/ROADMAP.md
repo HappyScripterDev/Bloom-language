@@ -388,6 +388,45 @@ Vertagt (weiterhin geplant):
 - GUI-Anbindung (aufbauend auf `std::win32`)
 - WebSocket, JSON-Streaming, Datenbankabstraktion
 
+## Version 0.16.0 – Formulare (implementiert)
+
+- **`std.web`-Formulare:** `form_body(body)` parst
+  `application/x-www-form-urlencoded`; `form_body_request(request)`
+  prüft zusätzlich den Content-Type (Parameter erlaubt, `charset` muss
+  UTF-8 sein, fehlender/fremder Typ ist ein Fehler). Leerer Body ist
+  ein gültiges leeres Formular
+- **Datenmodell:** verwaltetes `FormData`-Handle (`Type::Form`) mit
+  geordneten Name/Wert-Paaren; wiederholte Feldnamen bleiben erhalten
+  (Checkbox-Gruppen, Mehrfachauswahlen), leere Namen und leere Werte
+  sind zulässig und von „Feld fehlt“ unterscheidbar
+- **Zugriff:** `form_count`, `form_has`, `form_get` (genau ein Wert,
+  sonst `Err`), `form_first` (`Option`), `form_values` (alle Werte in
+  Reihenfolge), `form_names` (verschiedene Namen in
+  Erstauftritts-Reihenfolge)
+- **Serialisierung:** `form_encode` schreibt `name=value&...` in
+  Eintragsreihenfolge, Leerzeichen als `+`, reservierte Bytes als
+  `%XX`; Parse → Encode → Parse erhält Werte und Reihenfolge
+- **Dekodierung:** `+` als Leerzeichen (nur Formulare), Prozentescapes
+  genau einmal, UTF-8-Validierung; `%`, `%0`, `%GG` und ungültiges
+  UTF-8 sind Fehler und werden nicht abgeschnitten oder repariert
+- **Limits:** Body 1 MiB, 4096 Einträge, Name 256 Bytes, Wert 64 KiB
+  (nach Dekodierung); zusätzlich gilt das bestehende
+  `read_request`-Limit von 4 MiB
+- **Beispiele:** `form_parse`, `form_multiple_values`, `form_encode`,
+  `web_form_server`, `web_form_errors`
+- 492 Tests (320 Unit + 172 E2E), darunter Parse-/Limit-/Round-trip-/
+  Content-Type-/Echter-HTTP-Client-und-Server-/Leak-Tests
+
+Vertagt (weiterhin geplant):
+
+- Multipart-Formulare und Datei-Uploads, Sessions, CSRF-Tokens,
+  automatische Formularvalidierung
+- Streaming/Range-Requests, ETag/Last-Modified, Verzeichnis-Indizes,
+  automatisches Neuladen von Dateien
+- Template-Includes, Makros, ausführbare Ausdrücke, Raw-HTML
+- GUI-Anbindung (aufbauend auf `std::win32`)
+- WebSocket, JSON-Streaming, Datenbankabstraktion
+
 ## Version 1.0.0+ – Ökosystem (geplant)
 
 - Paketmanager, Language Server (LSP), Debug-Informationen

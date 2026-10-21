@@ -1355,10 +1355,20 @@ if m.status == 200 {
 | `json_response(connection, status, value)` | `int, int, JsonValue -> Result<bool, string>` |
 | `json_response_with(connection, status, value, headers)` | `int, int, JsonValue, string -> Result<bool, string>` |
 | `static_file(connection, root, request)` | `int, string, HttpRequest -> Result<int, string>` |
+| `form_body(body)` | `string -> Result<FormData, string>` |
+| `form_body_request(request)` | `HttpRequest -> Result<FormData, string>` |
+| `form_count(form)` | `FormData -> int` |
+| `form_has(form, name)` | `FormData, string -> bool` |
+| `form_get(form, name)` | `FormData, string -> Result<string, string>` |
+| `form_first(form, name)` | `FormData, string -> Option<string>` |
+| `form_values(form, name)` | `FormData, string -> [string]` |
+| `form_names(form)` | `FormData -> [string]` |
+| `form_encode(form)` | `FormData -> Result<string, string>` |
 
 ```bloom
 pub struct Router { id }   // undurchsichtiges, verwaltetes Handle
 pub struct Match  { status: int, name, allow, params }  // params: JsonValue
+pub struct FormData { id } // undurchsichtiges, verwaltetes Handle
 ```
 
 - **Ausführungsmodell:** Alles ist synchron; Bloom hat keine Closures,
@@ -1431,6 +1441,54 @@ pub struct Match  { status: int, name, allow, params }  // params: JsonValue
   kein ETag/Last-Modified, kein `index.html`-Fallback: ein leerer Pfad
   ergibt `404`). Der Rückgabewert ist der gesendete Status; `Err`
   bedeutet, dass die Antwort nicht geschrieben werden konnte.
+- **Formulare:** `form_body` parst einen
+  `application/x-www-form-urlencoded`-Body, `form_body_request` prüft
+  zusätzlich den `Content-Type`-Header. Einträge bleiben **in der
+  Reihenfolge des Requests** erhalten; wiederholte Feldnamen werden
+  nicht überschrieben (Checkbox-Gruppen, Mehrfachauswahlen). Ein Feld
+  ist entweder **nicht vorhanden** (dann ist `has` false und `get`
+  liefert `Err`), vorhanden mit **leerem Wert** (`get` liefert
+  `Ok("")`) oder vorhanden mit einem bzw. mehreren Werten.
+  `form_get` verlangt genau einen Wert: fehlt das Feld oder kommt es
+  mehrfach vor, ist das ein `Err` (kein stiller „erster Wert“).
+  `form_first` liefert den ersten Wert (`Option`), `form_values` alle
+  Werte in Reihenfolge, `form_names` die verschiedenen Namen in der
+  Reihenfolge des ersten Auftretens (für generische Iteration),
+  `form_count` die Zahl der Einträge (Mehrfachwerte zählen einzeln).
+  `form_encode` serialisiert in Eintragsreihenfolge: unreservierte
+  Bytes bleiben, Leerzeichen wird `+`, alles andere `%XX`
+  (Großbuchstaben). Parse → Encode → Parse erhält Namen, Werte,
+  Mehrfachwerte und Reihenfolge.
+- **Formulargrammatik:** `&` trennt Einträge, das **erste** `=` trennt
+  Name und Wert, `+` ist ein Leerzeichen, Prozentkodierung wird genau
+  einmal dekodiert, das Ergebnis muss gültiges UTF-8 sein. Leere
+  Segmente (`&&`, führendes/abschließendes `&`) werden übersprungen;
+  ein Eintrag ohne `=` hat einen leeren Wert; leere Namen sind
+  zulässig und verschieden von „Feld fehlt“. Ungültige Escapes
+  (`%`, `%0`, `%GG`) und ungültiges UTF-8 nach der Dekodierung sind
+  Fehler. `%2F` erzeugt in Formularen keinen Trenner (im Gegensatz zur
+  Pfadsegmentierung, die unverändert bleibt); `+` gilt nur hier als
+  Leerzeichen, nicht in Pfaden.
+- **Formular-Content-Type:** `form_body_request` akzeptiert
+  `application/x-www-form-urlencoded` (Groß-/Kleinschreibung egal,
+  Parameter erlaubt). Ein explizites `charset` muss UTF-8 sein. Fehlt
+  der Header oder ist der Medientyp ein anderer, ist das ein `Err`.
+  Ein leerer Body ist ein gültiges, leeres Formular.
+- **Formularlimits (erzwungen):** Body 1 MiB (`BLOOM_FORM_MAX_BYTES`),
+  höchstens 4096 Einträge, Feldname 256 Bytes, Feldwert 64 KiB (jeweils
+  nach der Dekodierung geprüft). Der Body wird schon von
+  `http::read_request` auf 4 MiB begrenzt; `form_body`/`form_body_request`
+  prüfen zusätzlich die 1-MiB-Formulargrenze, bevor geparst wird.
+  `form_encode` verweigert Ergebnisse über 1 MiB.
+- **Sicherheit:** Formularwerte sind **nicht vertrauenswürdig**.
+  Dekodieren ist keine Validierung, kein Beweis für Authentizität und
+  keine Autorisierung; Feldnamen sagen nichts über die Herkunft eines
+  Wertes. Die API setzt keine CSRF-Tokens und keine Sessions um, und
+  URL-Kodierung schützt nicht vor SQL-Injection oder anderen
+  kontextabhängigen Injection-Problemen. HTML-Templates escapen Werte
+  weiterhin automatisch; es gibt keinen neuen Rohausgabe-Pfad.
+  `FormData` ist ein verwalteter Besitzwert (Referenzzählung, kein
+  manuelles Freigeben).
 
 ### 13.13 Standardmodul `std::html` (Escaping und Templates)
 
@@ -1634,6 +1692,10 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
 - **Streaming/Range-Requests, ETag/Last-Modified, Verzeichnis-Indizes
   und automatisches Neuladen von Dateien bei `web::static_file` bzw.
   `html::template_file`**
+- **Multipart-Formulare und Datei-Uploads, Sessions, CSRF-Tokens und
+  automatische Formularvalidierung** (Formulare sind reine
+  `application/x-www-form-urlencoded`-Daten; alles Weitere ist Sache
+  der Anwendung)
 - **C-Structs by value, Funktionszeiger/Callbacks, variadische
   C-Funktionen, Pointer-Arithmetik, Dereferenzierung von `rawptr`**
 - **UDP, asynchrone/Thread-Netzwerkoperationen, Threads allgemein**

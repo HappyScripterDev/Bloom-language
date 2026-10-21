@@ -1290,3 +1290,629 @@ bloom_enum_Result_i64_str bloom_web_static_file(
     result.data.m_Ok._0 = 200;
     return result;
 }
+
+/* ---- forms (application/x-www-form-urlencoded) -------------------------- */
+
+/*
+ * Form data keeps every name/value pair in the order it appeared in the
+ * request. Repeated names (checkbox groups, multi-selects) are therefore
+ * preserved instead of being overwritten. Names and values are ordinary
+ * reference-counted strings; the form owns one reference to each of them.
+ *
+ * Limits (documented in docs/LANGUAGE_SPEC.md):
+ *   body <= 1 MiB, <= 4096 entries, name <= 256 bytes, value <= 64 KiB.
+ */
+#define BLOOM_FORM_MAX_BYTES (1024 * 1024)
+#define BLOOM_FORM_MAX_ENTRIES 4096
+#define BLOOM_FORM_MAX_NAME 256
+#define BLOOM_FORM_MAX_VALUE (64 * 1024)
+
+typedef struct {
+    bloom_str name;
+    bloom_str value;
+} bloom_form_entry;
+
+typedef struct {
+    size_t rc;
+    bloom_form_entry *entries;
+    size_t count;
+    size_t cap;
+} bloom_web_form;
+
+static bloom_str bloom_web_lit(const char *p, size_t n) {
+    bloom_str s;
+    s.rc = BLOOM_STR_IMMORTAL;
+    s.data = (char *)p;
+    s.len = n;
+    return s;
+}
+
+static bloom_struct_std_web_FormData bloom_web_form_wrap(bloom_web_form *f) {
+    bloom_struct_std_web_FormData v;
+    v.f_id = (bloom_form_handle)(intptr_t)f;
+    return v;
+}
+
+static bloom_web_form *bloom_web_form_unwrap(bloom_struct_std_web_FormData v) {
+    return (bloom_web_form *)(intptr_t)v.f_id;
+}
+
+bloom_form_handle bloom_web_form_retain(bloom_form_handle h) {
+    bloom_web_form *f = (bloom_web_form *)(intptr_t)h;
+    if (f != NULL) {
+        f->rc++;
+    }
+    return h;
+}
+
+void bloom_web_form_release(bloom_form_handle *h) {
+    if (h == NULL || *h == 0) {
+        return;
+    }
+    bloom_web_form *f = (bloom_web_form *)(intptr_t)*h;
+    *h = 0;
+    if (f->rc > 0) {
+        f->rc--;
+    }
+    if (f->rc == 0) {
+        for (size_t i = 0; i < f->count; i++) {
+            bloom_str_drop(&f->entries[i].name);
+            bloom_str_drop(&f->entries[i].value);
+        }
+        free(f->entries);
+        free(f);
+        bloom_live_allocs--;
+    }
+}
+
+static bloom_web_form *bloom_web_form_new(void) {
+    bloom_web_form *f = (bloom_web_form *)calloc(1, sizeof(bloom_web_form));
+    if (f == NULL) {
+        bloom_panicf(NULL, 0, "out of memory");
+    }
+    f->rc = 1;
+    bloom_live_allocs++;
+    return f;
+}
+
+/* Takes ownership of name and value. */
+static void bloom_web_form_push(
+    bloom_web_form *f,
+    bloom_str name,
+    bloom_str value
+) {
+    if (f->count >= BLOOM_FORM_MAX_ENTRIES) {
+        bloom_str_drop(&name);
+        bloom_str_drop(&value);
+        bloom_panicf(NULL, 0, "too many form entries");
+    }
+    if (f->count == f->cap) {
+        size_t cap = f->cap ? f->cap * 2 : 8;
+        bloom_form_entry *ne = (bloom_form_entry *)realloc(
+            f->entries,
+            cap * sizeof *ne
+        );
+        if (ne == NULL) {
+            bloom_panicf(NULL, 0, "out of memory");
+        }
+        f->entries = ne;
+        f->cap = cap;
+    }
+    f->entries[f->count].name = name;
+    f->entries[f->count].value = value;
+    f->count++;
+}
+
+static bloom_enum_Result_std_web_FormData_str bloom_web_form_ok_form(
+    bloom_struct_std_web_FormData v
+) {
+    bloom_enum_Result_std_web_FormData_str r;
+    r.tag = 0;
+    r.data.m_Ok._0 = v;
+    return r;
+}
+
+static bloom_enum_Result_std_web_FormData_str bloom_web_form_err(
+    bloom_str m
+) {
+    bloom_enum_Result_std_web_FormData_str r;
+    r.tag = 1;
+    r.data.m_Err._0 = m;
+    return r;
+}
+
+static bloom_enum_Option_str bloom_web_form_some(bloom_str v) {
+    bloom_enum_Option_str r;
+    r.tag = 0;
+    r.data.m_Some._0 = v;
+    return r;
+}
+
+static bloom_enum_Option_str bloom_web_form_none(void) {
+    bloom_enum_Option_str r;
+    r.tag = 1;
+    return r;
+}
+
+static bloom_enum_Result_str_str bloom_web_form_ok_str(bloom_str v) {
+    bloom_enum_Result_str_str r;
+    r.tag = 0;
+    r.data.m_Ok._0 = v;
+    return r;
+}
+
+static bloom_enum_Result_str_str bloom_web_form_err_str(bloom_str m) {
+    bloom_enum_Result_str_str r;
+    r.tag = 1;
+    r.data.m_Err._0 = m;
+    return r;
+}
+
+static bool bloom_web_form_name_eq(bloom_str a, bloom_str b) {
+    if (a.len != b.len) {
+        return false;
+    }
+    if (a.len == 0) {
+        return true;
+    }
+    return memcmp(a.data, b.data, a.len) == 0;
+}
+
+/*
+ * Parses `a=1&b=2` with form-style decoding. `&` separates entries, the
+ * first `=` separates name and value, `+` is a space, percent escapes are
+ * decoded exactly once and the result must be valid UTF-8. Empty segments
+ * are skipped; an entry without `=` has an empty value. Empty names and
+ * empty values are kept because they are different from a missing field.
+ */
+static void bloom_web_form_abort(bloom_web_form *f) {
+    for (size_t i = 0; i < f->count; i++) {
+        bloom_str_drop(&f->entries[i].name);
+        bloom_str_drop(&f->entries[i].value);
+    }
+    free(f->entries);
+    free(f);
+    bloom_live_allocs--;
+}
+
+static bloom_enum_Result_std_web_FormData_str bloom_web_form_parse(
+    bloom_str body,
+    const char *op
+) {
+    if (body.len > BLOOM_FORM_MAX_BYTES) {
+        return bloom_web_form_err(bloom_web_msg(
+            op,
+            "form body exceeds 1048576 bytes"
+        ));
+    }
+    bloom_web_form *f = bloom_web_form_new();
+    size_t i = 0;
+    while (i < body.len) {
+        size_t start = i;
+        while (i < body.len && body.data[i] != '&') {
+            i++;
+        }
+        size_t part_len = i - start;
+        if (i < body.len) {
+            i++;
+        }
+        if (part_len == 0) {
+            continue;
+        }
+        size_t eq = 0;
+        while (eq < part_len && body.data[start + eq] != '=') {
+            eq++;
+        }
+        size_t name_raw = eq;
+        size_t value_raw = eq < part_len ? part_len - eq - 1 : 0;
+        const char *value_start = body.data + start
+            + (eq < part_len ? eq + 1 : part_len);
+        char *name = NULL;
+        size_t name_len = 0;
+        int rc = bloom_web_decode(
+            body.data + start,
+            name_raw,
+            true,
+            &name,
+            &name_len
+        );
+        if (rc != 0) {
+            bloom_web_form_abort(f);
+            return bloom_web_form_err(bloom_web_msg(
+                op,
+                rc == 1
+                    ? "invalid percent-encoding in field name"
+                    : "invalid UTF-8 in decoded field name"
+            ));
+        }
+        if (name_len > BLOOM_FORM_MAX_NAME) {
+            free(name);
+            bloom_web_form_abort(f);
+            return bloom_web_form_err(bloom_web_msg(
+                op,
+                "field name exceeds 256 bytes"
+            ));
+        }
+        char *value = NULL;
+        size_t value_len = 0;
+        rc = bloom_web_decode(value_start, value_raw, true, &value, &value_len);
+        if (rc != 0) {
+            free(name);
+            bloom_web_form_abort(f);
+            return bloom_web_form_err(bloom_web_msg(
+                op,
+                rc == 1
+                    ? "invalid percent-encoding in field value"
+                    : "invalid UTF-8 in decoded field value"
+            ));
+        }
+        if (value_len > BLOOM_FORM_MAX_VALUE) {
+            free(name);
+            free(value);
+            bloom_web_form_abort(f);
+            return bloom_web_form_err(bloom_web_msg(
+                op,
+                "field value exceeds 65536 bytes"
+            ));
+        }
+        if (f->count >= BLOOM_FORM_MAX_ENTRIES) {
+            free(name);
+            free(value);
+            bloom_web_form_abort(f);
+            return bloom_web_form_err(bloom_web_msg(
+                op,
+                "too many form entries (max 4096)"
+            ));
+        }
+        bloom_str entry_name = bloom_str_from_bytes(name, name_len);
+        bloom_str entry_value = bloom_str_from_bytes(value, value_len);
+        free(name);
+        free(value);
+        bloom_web_form_push(f, entry_name, entry_value);
+    }
+    return bloom_web_form_ok_form(bloom_web_form_wrap(f));
+}
+
+/* Parses a URL-encoded body directly (no Content-Type is consulted). */
+bloom_enum_Result_std_web_FormData_str bloom_web_form_body(bloom_str body) {
+    return bloom_web_form_parse(body, "form_body");
+}
+
+static bool bloom_web_ct_ci_eq(const char *a, size_t n, const char *b) {
+    size_t bn = strlen(b);
+    if (n != bn) {
+        return false;
+    }
+    for (size_t i = 0; i < n; i++) {
+        char c = a[i];
+        char d = b[i];
+        if (c >= 'A' && c <= 'Z') {
+            c = (char)(c + 32);
+        }
+        if (d >= 'A' && d <= 'Z') {
+            d = (char)(d + 32);
+        }
+        if (c != d) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * Checks the media type and looks for a charset parameter. Any unknown
+ * parameter is ignored; a charset other than UTF-8 is rejected because
+ * decoded form values must be UTF-8 strings.
+ */
+static bool bloom_web_ct_is_form(bloom_str ct, bool *bad_charset) {
+    *bad_charset = false;
+    size_t end = 0;
+    while (end < ct.len && ct.data[end] != ';') {
+        end++;
+    }
+    size_t start = 0;
+    while (start < end && (ct.data[start] == ' ' || ct.data[start] == '\t')) {
+        start++;
+    }
+    while (end > start && (ct.data[end - 1] == ' ' || ct.data[end - 1] == '\t')) {
+        end--;
+    }
+    if (!bloom_web_ct_ci_eq(
+            ct.data + start,
+            end - start,
+            "application/x-www-form-urlencoded"
+        )) {
+        return false;
+    }
+    size_t i = end;
+    while (i < ct.len) {
+        if (ct.data[i] == ';') {
+            i++;
+        }
+        while (i < ct.len && (ct.data[i] == ' ' || ct.data[i] == '\t')) {
+            i++;
+        }
+        size_t pstart = i;
+        while (i < ct.len && ct.data[i] != '=' && ct.data[i] != ';') {
+            i++;
+        }
+        size_t pend = i;
+        while (pend > pstart
+               && (ct.data[pend - 1] == ' ' || ct.data[pend - 1] == '\t')) {
+            pend--;
+        }
+        size_t vstart = i;
+        size_t vend = i;
+        if (i < ct.len && ct.data[i] == '=') {
+            i++;
+            vstart = i;
+            while (i < ct.len && ct.data[i] != ';') {
+                i++;
+            }
+            vend = i;
+        }
+        while (vstart < vend
+               && (ct.data[vstart] == ' ' || ct.data[vstart] == '\t')) {
+            vstart++;
+        }
+        while (vend > vstart
+               && (ct.data[vend - 1] == ' ' || ct.data[vend - 1] == '\t')) {
+            vend--;
+        }
+        if (vend >= vstart + 2 && ct.data[vstart] == '"'
+            && ct.data[vend - 1] == '"') {
+            vstart++;
+            vend--;
+        }
+        if (bloom_web_ct_ci_eq(ct.data + pstart, pend - pstart, "charset")) {
+            if (!bloom_web_ct_ci_eq(ct.data + vstart, vend - vstart, "utf-8")
+                && !bloom_web_ct_ci_eq(ct.data + vstart, vend - vstart, "utf8")) {
+                *bad_charset = true;
+            }
+        }
+    }
+    return true;
+}
+
+/*
+ * Parses a request body as a form. The Content-Type header must be
+ * `application/x-www-form-urlencoded` (parameters are allowed, an explicit
+ * charset must be UTF-8). An empty body is a valid, empty form.
+ */
+bloom_enum_Result_std_web_FormData_str bloom_web_form_request(
+    bloom_struct_std_http_HttpRequest request
+) {
+    bloom_enum_Option_str ct = bloom_http_header_get(
+        request.f_headers,
+        bloom_web_lit("content-type", 12)
+    );
+    if (ct.tag != 0) {
+        return bloom_web_form_err(bloom_web_msg(
+            "form_body_request",
+            "missing Content-Type header"
+        ));
+    }
+    bloom_str value = ct.data.m_Some._0;
+    bool bad_charset = false;
+    bool is_form = bloom_web_ct_is_form(value, &bad_charset);
+    bloom_str_drop(&value);
+    if (!is_form) {
+        return bloom_web_form_err(bloom_web_msg(
+            "form_body_request",
+            "unsupported Content-Type (expected application/x-www-form-urlencoded)"
+        ));
+    }
+    if (bad_charset) {
+        return bloom_web_form_err(bloom_web_msg(
+            "form_body_request",
+            "unsupported charset (only UTF-8)"
+        ));
+    }
+    return bloom_web_form_parse(request.f_body, "form_body_request");
+}
+
+int64_t bloom_web_form_count(bloom_struct_std_web_FormData form) {
+    bloom_web_form *f = bloom_web_form_unwrap(form);
+    if (f == NULL) {
+        return 0;
+    }
+    return (int64_t)f->count;
+}
+
+bool bloom_web_form_has(bloom_struct_std_web_FormData form, bloom_str name) {
+    bloom_web_form *f = bloom_web_form_unwrap(form);
+    if (f == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < f->count; i++) {
+        if (bloom_web_form_name_eq(f->entries[i].name, name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/*
+ * Returns the value of a field that occurs exactly once. A missing field
+ * and a field with several values are errors, so a program cannot
+ * accidentally treat the first of many values as "the" value. An existing
+ * field with an empty value returns Ok("").
+ */
+bloom_enum_Result_str_str bloom_web_form_get(
+    bloom_struct_std_web_FormData form,
+    bloom_str name
+) {
+    bloom_web_form *f = bloom_web_form_unwrap(form);
+    if (f == NULL) {
+        return bloom_web_form_err_str(bloom_web_msg(
+            "form_get",
+            "invalid form data"
+        ));
+    }
+    bloom_str found = {0, NULL, 0};
+    size_t count = 0;
+    for (size_t i = 0; i < f->count; i++) {
+        if (bloom_web_form_name_eq(f->entries[i].name, name)) {
+            count++;
+            if (count == 1) {
+                found = f->entries[i].value;
+            }
+        }
+    }
+    if (count == 0) {
+        return bloom_web_form_err_str(bloom_web_msg(
+            "form_get",
+            "field not found"
+        ));
+    }
+    if (count > 1) {
+        return bloom_web_form_err_str(bloom_web_msg(
+            "form_get",
+            "field has multiple values"
+        ));
+    }
+    return bloom_web_form_ok_str(bloom_str_clone(found));
+}
+
+bloom_enum_Option_str bloom_web_form_first(
+    bloom_struct_std_web_FormData form,
+    bloom_str name
+) {
+    bloom_web_form *f = bloom_web_form_unwrap(form);
+    if (f == NULL) {
+        return bloom_web_form_none();
+    }
+    for (size_t i = 0; i < f->count; i++) {
+        if (bloom_web_form_name_eq(f->entries[i].name, name)) {
+            return bloom_web_form_some(bloom_str_clone(f->entries[i].value));
+        }
+    }
+    return bloom_web_form_none();
+}
+
+bloom_arr_str bloom_web_form_values(
+    bloom_struct_std_web_FormData form,
+    bloom_str name
+) {
+    bloom_arr_str out = bloom_arr_str_new();
+    bloom_web_form *f = bloom_web_form_unwrap(form);
+    if (f != NULL) {
+        for (size_t i = 0; i < f->count; i++) {
+            if (bloom_web_form_name_eq(f->entries[i].name, name)) {
+                bloom_arr_str_push_owned(
+                    out,
+                    bloom_str_clone(f->entries[i].value)
+                );
+            }
+        }
+    }
+    return out;
+}
+
+/* Distinct field names in first-occurrence order (for generic iteration). */
+bloom_arr_str bloom_web_form_names(bloom_struct_std_web_FormData form) {
+    bloom_arr_str out = bloom_arr_str_new();
+    bloom_web_form *f = bloom_web_form_unwrap(form);
+    if (f == NULL) {
+        return out;
+    }
+    for (size_t i = 0; i < f->count; i++) {
+        bool seen = false;
+        for (size_t k = 0; k < i && !seen; k++) {
+            if (bloom_web_form_name_eq(f->entries[k].name, f->entries[i].name)) {
+                seen = true;
+            }
+        }
+        if (!seen) {
+            bloom_arr_str_push_owned(out, bloom_str_clone(f->entries[i].name));
+        }
+    }
+    return out;
+}
+
+static bool bloom_web_form_unreserved(unsigned char c) {
+    if (c >= 'a' && c <= 'z') {
+        return true;
+    }
+    if (c >= 'A' && c <= 'Z') {
+        return true;
+    }
+    if (c >= '0' && c <= '9') {
+        return true;
+    }
+    return c == '-' || c == '.' || c == '_' || c == '~';
+}
+
+static size_t bloom_web_form_encoded_len(bloom_str s) {
+    size_t n = 0;
+    for (size_t i = 0; i < s.len; i++) {
+        unsigned char c = (unsigned char)s.data[i];
+        n += bloom_web_form_unreserved(c) ? 1 : (c == ' ' ? 1 : 3);
+    }
+    return n;
+}
+
+static void bloom_web_form_encode_into(char *out, size_t *at, bloom_str s) {
+    static const char hex[] = "0123456789ABCDEF";
+    for (size_t i = 0; i < s.len; i++) {
+        unsigned char c = (unsigned char)s.data[i];
+        if (bloom_web_form_unreserved(c)) {
+            out[(*at)++] = (char)c;
+        } else if (c == ' ') {
+            out[(*at)++] = '+';
+        } else {
+            out[(*at)++] = '%';
+            out[(*at)++] = hex[c >> 4];
+            out[(*at)++] = hex[c & 15];
+        }
+    }
+}
+
+/*
+ * Encodes the form in entry order. Unreserved bytes stay as-is, spaces
+ * become `+`, everything else becomes `%XX` (uppercase). The result must
+ * fit into the same 1 MiB limit that the parser accepts, so whatever this
+ * function produces can be parsed again with identical entries and order.
+ */
+bloom_enum_Result_str_str bloom_web_form_encode(
+    bloom_struct_std_web_FormData form
+) {
+    bloom_web_form *f = bloom_web_form_unwrap(form);
+    if (f == NULL) {
+        return bloom_web_form_err_str(bloom_web_msg(
+            "form_encode",
+            "invalid form data"
+        ));
+    }
+    size_t total = 0;
+    for (size_t i = 0; i < f->count; i++) {
+        size_t add = bloom_web_form_encoded_len(f->entries[i].name) + 1
+            + bloom_web_form_encoded_len(f->entries[i].value);
+        if (i > 0) {
+            add += 1;
+        }
+        if (add > BLOOM_FORM_MAX_BYTES - total) {
+            return bloom_web_form_err_str(bloom_web_msg(
+                "form_encode",
+                "encoded form exceeds 1048576 bytes"
+            ));
+        }
+        total += add;
+    }
+    char *buf = (char *)malloc(total + 1);
+    if (buf == NULL) {
+        bloom_panicf(NULL, 0, "out of memory");
+    }
+    size_t at = 0;
+    for (size_t i = 0; i < f->count; i++) {
+        if (i > 0) {
+            buf[at++] = '&';
+        }
+        bloom_web_form_encode_into(buf, &at, f->entries[i].name);
+        buf[at++] = '=';
+        bloom_web_form_encode_into(buf, &at, f->entries[i].value);
+    }
+    bloom_str result = bloom_str_from_bytes(buf, at);
+    free(buf);
+    return bloom_web_form_ok_str(result);
+}

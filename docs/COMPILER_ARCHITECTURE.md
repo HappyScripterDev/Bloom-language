@@ -68,8 +68,9 @@ dafür:
   internen Typ `Type::Json`) und die Structs `std::web::Router` (Feld `id`
 vom internen Typ `Type::Web`) sowie `std::web::Match` (Felder `status`,
 `name`, `allow` und `params: std::json::JsonValue`), `std::fs::Bytes`
-(Feld `id` vom internen Typ `Type::Bytes`) und `std::html::Template`
-(Feld `id` vom internen Typ `Type::Html`).
+(Feld `id` vom internen Typ `Type::Bytes`), `std::html::Template`
+(Feld `id` vom internen Typ `Type::Html`) und `std::web::FormData`
+(Feld `id` vom internen Typ `Type::Form`).
 
 Codegen überspringt Prototypen für `std::*`-Funktionen, emittiert die
 C-Implementierung nur für tatsächlich geladene Module (nach den
@@ -238,6 +239,32 @@ Wurzelordner liegt — Symlinks/Junctions werden dadurch mitgeprüft.
 fest, unbekannte Endungen liefern `application/octet-stream`. Emission
 von `std::fs` erfolgt vor `std::http`/`std::web`/`std::html`, die diese
 Helfer und den `Bytes`-Struct in ihren Signaturen verwenden.
+
+## Formulare (`std::web::FormData`)
+
+Der Formular-Code lebt in `bloom_web.c`, weil dort schon Request-Daten
+und Prozentdekodierung liegen. Ein `bloom_web_form` ist ein
+refcountetes Handle (`Type::Form`, Bauart wie `Type::Web`) auf ein
+Array von `bloom_form_entry { name: bloom_str; value: bloom_str }`.
+Der Parser arbeitet auf dem Body-Puffer: Eintragsgrenzen werden
+zuerst gesucht, dann Name und Wert mit **derselben**
+`bloom_web_decode`-Funktion wie die Query-Parameter dekodiert
+(`+` nur hier als Leerzeichen, `%` genau einmal, UTF-8-Validierung,
+Ausgabepuffer höchstens Eingabelänge plus eins). Die Einträge behalten
+ihre Reihenfolge, Duplikate werden nicht zusammengefasst. Limits
+werden beim Zählen geprüft (1 MiB Body, 4096 Einträge, 256 Byte Name,
+64 KiB Wert), bevor eine weitere Kopie angelegt wird. `form_body_request`
+liest den Content-Type über `bloom_http_header_get`, ignoriert
+Parameter außer `charset` und lehnt fremde Medientypen sowie
+Nicht-UTF-8-Charsets ab. Der Encoder schreibt in einen vorab
+berechneten Puffer (reservierte Bytes als `%XX`, Leerzeichen als `+`)
+und verweigert Ergebnisse über 1 MiB, damit die Ausgabe wieder
+parsebar bleibt. Alle Funktionen nehmen das Handle geliehen; `Ok`-Werte
+geben einen neuen Besitzwert zurück, Fehlerpfade geben alle Teilwerte
+frei. Testseitig prüfen `form_body_parse_natively`,
+`form_encode_roundtrip_natively`, `web_form_server_natively` und
+`web_form_errors_natively` Parsen, Limits, Round-trip und den echten
+HTTP-Weg inklusive Leak-Zählern.
 
 ## Formatter (`src/fmt.rs`)
 

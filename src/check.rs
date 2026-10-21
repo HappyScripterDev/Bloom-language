@@ -1658,8 +1658,23 @@ impl Checker {
             });
         let router_ty = Type::Struct(format!("{}::Router", module), Vec::new());
         let match_ty = Type::Struct(format!("{}::Match", module), Vec::new());
+        let form_canonical = format!("{}::FormData", module);
+        self.structs
+            .entry(form_canonical)
+            .or_insert_with(|| StructInfo {
+                params: Vec::new(),
+                fields: vec![StructField {
+                    name: "id".to_string(),
+                    ty: Type::Form,
+                }],
+                span,
+                module: module.to_string(),
+                is_pub: true,
+            });
+        let form_ty = Type::Struct(format!("{}::FormData", module), Vec::new());
         let request_ty = Type::Struct("std::http::HttpRequest".to_string(), Vec::new());
         let str_err = |ok: Type| Type::Enum("Result".to_string(), vec![ok, Type::String]);
+        let opt_str = Type::Enum("Option".to_string(), vec![Type::String]);
         let defs: Vec<(&str, &str, Vec<Type>, Type)> = vec![
             ("router", "bloom_web_new_router", vec![], router_ty.clone()),
             (
@@ -1709,6 +1724,60 @@ impl Checker {
                 "bloom_web_static_file",
                 vec![Type::Int, Type::String, request_ty.clone()],
                 str_err(Type::Int),
+            ),
+            (
+                "form_body",
+                "bloom_web_form_body",
+                vec![Type::String],
+                str_err(form_ty.clone()),
+            ),
+            (
+                "form_body_request",
+                "bloom_web_form_request",
+                vec![request_ty.clone()],
+                str_err(form_ty.clone()),
+            ),
+            (
+                "form_count",
+                "bloom_web_form_count",
+                vec![form_ty.clone()],
+                Type::Int,
+            ),
+            (
+                "form_has",
+                "bloom_web_form_has",
+                vec![form_ty.clone(), Type::String],
+                Type::Bool,
+            ),
+            (
+                "form_get",
+                "bloom_web_form_get",
+                vec![form_ty.clone(), Type::String],
+                str_err(Type::String),
+            ),
+            (
+                "form_first",
+                "bloom_web_form_first",
+                vec![form_ty.clone(), Type::String],
+                opt_str,
+            ),
+            (
+                "form_values",
+                "bloom_web_form_values",
+                vec![form_ty.clone(), Type::String],
+                Type::Array(Box::new(Type::String)),
+            ),
+            (
+                "form_names",
+                "bloom_web_form_names",
+                vec![form_ty.clone()],
+                Type::Array(Box::new(Type::String)),
+            ),
+            (
+                "form_encode",
+                "bloom_web_form_encode",
+                vec![form_ty],
+                str_err(Type::String),
             ),
         ];
         for (name, c_name, params, ret) in defs {

@@ -1,0 +1,43 @@
+// Mehrfache Feldnamen (Checkbox-Gruppen, Mehrfachauswahl).
+// Wiederholte Namen bleiben in der Reihenfolge des Requests erhalten.
+use std::web;
+
+fn run() -> Result<int, string> {
+    let form = web::form_body("lang=de&lang=en&lang=fr")?;
+
+    let all = web::form_values(form, "lang");
+    println("Anzahl Sprachen: " + str(len(all)));
+    var i = 0;
+    while i < len(all) {
+        println("  " + all[i]);
+        i = i + 1;
+    }
+
+    // form_get verlangt genau einen Wert. Bei mehreren Werten ist das ein
+    // Fehler, damit nicht versehentlich nur der erste genommen wird.
+    match web::form_get(form, "lang") {
+        Result::Ok(v) => println("form_get: " + v),
+        Result::Err(e) => println("form_get: " + e)
+    };
+
+    // Wer nur den ersten Wert will, sagt das auch:
+    match web::form_first(form, "lang") {
+        Option::Some(v) => println("erster Wert: " + v),
+        Option::None => println("kein Wert")
+    };
+
+    println("Namen: " + join(web::form_names(form), ", "));
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}

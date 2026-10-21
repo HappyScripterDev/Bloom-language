@@ -12,7 +12,7 @@ schreiben kann: Dateien lesen, im Netzwerk reden, JSON verarbeiten,
 HTML-Seiten ausliefern. Alles davon ist schon eingebaut und braucht
 keine externen Bibliotheken.
 
-Stand: **0.15.0**. Getestet wird auf Windows (MSVC). Linux und macOS
+Stand: **0.16.0**. Getestet wird auf Windows (MSVC). Linux und macOS
 sind im Code vorgesehen, aber ich entwickle und teste fast nur auf
 Windows.
 
@@ -77,7 +77,7 @@ fn main() -> int {
   raus, statt dass irgendwo Müll gelesen wird.
 - Standardbibliothek ohne Ballast: `std.math`, `std.fs`, `std.process`,
   `std.time`, `std.net`, `std.http` (Client und Server, mit HTTPS),
-  `std.json`, `std.path`, `std.web`, `std.html`.
+  `std.json`, `std.path`, `std.web` (Router und Formulare), `std.html`.
 - `bloom fmt` räumt den Quelltext auf, `bloom check` prüft ohne zu
   bauen, `bloom init` legt ein Projekt an.
 - FFI zu C und ein paar Windows-Funktionen, falls man doch mal ans
@@ -102,17 +102,21 @@ Wenn Bloom keinen C-Compiler findet, sagt es dir, was fehlt. Welchen
 es nimmt, kann man mit `BLOOM_CC` erzwingen (`set BLOOM_CC=clang`).
 Mehr dazu steht in [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
-## Was in 0.15 dazugekommen ist
+## Was in 0.16 dazugekommen ist
 
-- HTML-Vorlagen aus Dateien laden: `html::template_file` und
-  `html::template_file_from`. Letzteres nimmt einen Wurzelordner und
-  lässt sich nicht mit `..` oder Symlinks aus dem Ordner rauslocken.
-- Binärdaten: `fs::read_bytes` gibt einen `std::fs::Bytes`-Puffer
-  zurück, den man mit `http::write_response_bytes` direkt verschicken
-  kann. Nullbytes, PNGs, was auch immer.
-- Statische Dateien ausliefern: `web::static_file`. GET/HEAD,
-  passender Content-Type, 404 wenn sie fehlt, 400 wenn jemand am
-  Wurzelordner zieht.
+- Formulare: `application/x-www-form-urlencoded`-Bodies parsen
+  (`web::form_body`, `web::form_body_request`). Wiederholte Feldnamen
+  wie bei Checkbox-Gruppen bleiben erhalten, in der Reihenfolge des
+  Requests.
+- Auslesen: `form_has`, `form_get` (nur bei genau einem Wert),
+  `form_first`, `form_values`, `form_names`, `form_count`. Fehlendes
+  Feld und vorhandenes Feld mit leerem Wert sind zwei verschiedene
+  Dinge.
+- Zurückschreiben: `web::form_encode` macht aus den Daten wieder
+  URL-kodierten Text. Parse → Encode → Parse ergibt dasselbe.
+- Limits: Body 1 MiB, 4096 Einträge, Name 256 Bytes, Wert 64 KiB.
+  Ungültige Prozentkodierung oder ungültiges UTF-8 sind Fehler und
+  werden nicht stillschweigend repariert.
 
 ## Was (noch) nicht geht
 
@@ -141,7 +145,7 @@ Damit hier keine falschen Erwartungen entstehen:
 ## Selbst entwickeln
 
 ```bash
-cargo test                    # 486 Tests: Unit + echte kompilierte Programme
+cargo test                    # 492 Tests: Unit + echte kompilierte Programme
 cargo clippy --all-targets
 cargo fmt
 ```
@@ -156,6 +160,8 @@ Beispiele liegen alle in `examples/` und lassen sich direkt starten:
 bloom run examples/json_parse.blm
 bloom run examples/web_json_api.blm
 bloom run examples/template_file.blm
+bloom run examples/form_parse.blm
+bloom run examples/web_form_server.blm
 ```
 
 ## Lizenz

@@ -204,7 +204,14 @@ Handle auf die exakten Dateibytes (auch NUL-Bytes), Kopieren retained,
 das Scope-Ende gibt Puffer und Handle frei; `http::write_response_bytes`
 liest den Puffer nur und übernimmt keinen Besitz. Die Kontrolle über
 den Puffer liegt ausschließlich in der Laufzeit, daher kann Bloom-Code
-keine Länge fälschen.
+keine Länge fälschen. **Formulardaten (`std::web::FormData`,
+`Type::Form`) folgen demselben Muster**: das Handle besitzt ein Array
+aus Name/Wert-Paaren, jedes Paar hält je eine Referenz auf seine
+Strings. Kopieren retained das Handle, das Scope-Ende gibt alle Paare
+und die Strings frei; ein Parsefehler gibt das halbfertige Formular
+samt bereits gelesener Einträge frei. Ein `Ok` von `form_get`,
+`form_first` oder `form_values` liefert geklonte Strings bzw. ein
+eigenes Array, nie eine Referenz in das Formular hinein.
 Alle Stdlib-Tests
 laufen unter `BLOOM_MEM_REPORT=1`. Getestet wird nativ mit MSVC
 (Windows). Valgrind/ASan sind auf dieser Toolchain nicht verfügbar und
