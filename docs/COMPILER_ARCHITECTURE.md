@@ -1,10 +1,11 @@
-# Compiler-Architektur von Bloom
+# Wie der Compiler funktioniert
 
-## Überblick
-
-Der Bloom-Compiler ist eine in Rust geschriebene Binäranwendung ohne externe
-Crates. Er übersetzt eine `.blm`-Datei in C-Code und ruft anschließend einen
-installierten C-Compiler auf, der ein natives Programm erzeugt.
+Bloom ist ein Rust-Programm ohne externe Crates. Es nimmt eine `.blm`-Datei,
+macht daraus C-Code und gibt den einem normalen C-Compiler, der die `.exe`
+baut. Warum dieser Umweg? Weil auf jedem Rechner irgendein C-Compiler
+rumliegt und man sich dann nicht für jede Plattform einen eigenen Backend
+bauen muss. Der Preis ist, dass die Fehlermeldungen des C-Compilers
+manchmal durchscheinen, aber damit kann ich leben.
 
 ```text
  .blm-Quelltext

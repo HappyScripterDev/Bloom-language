@@ -1,10 +1,11 @@
-# Bloom Sprachspezifikation (Version 0.15.0)
+# Bloom Sprachspezifikation
 
-Diese Spezifikation beschreibt exakt die Sprache, die der in diesem Repository
-enthaltene Compiler implementiert. Funktionen, die hier nicht stehen, sind
-**nicht** implementiert (siehe auch `docs/ROADMAP.md`).
+Diese Datei beschreibt die Sprache so, wie der Compiler sie wirklich
+versteht. Was hier nicht steht, gibt es nicht. Wenn du wissen willst, was
+noch geplant ist, schau in `docs/ROADMAP.md`.
 
-Quelldateien haben die Endung `.blm` und sind UTF-8-kodiert (BOM wird toleriert).
+Quelldateien enden auf `.blm` und sind UTF-8 (ein BOM am Anfang stört
+nicht).
 
 ## 1. Lexikalische Struktur
 

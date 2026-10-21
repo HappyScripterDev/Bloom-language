@@ -1,7 +1,11 @@
-# Bloom Roadmap
+# Roadmap
 
-Legende: **implementiert** – funktioniert und ist getestet. **geplant** – noch
-nicht begonnen.
+Hier steht, was in welcher Version reingekommen ist und was noch fehlt.
+Die alten Versionen liest wahrscheinlich niemand mehr, aber ich lasse sie
+drin, weil man so sieht, wie das Ding gewachsen ist.
+
+**implementiert** heißt: ist drin und hat Tests. **geplant** heißt: steht
+auf der Liste, angefasst habe ich es noch nicht.
 
 ## Version 0.1.0 – MVP (implementiert)
 

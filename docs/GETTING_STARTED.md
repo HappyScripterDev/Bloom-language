@@ -1,57 +1,46 @@
 # Erste Schritte mit Bloom
 
-Diese Anleitung führt vom leeren Rechner zum laufenden Bloom-Programm.
-Sie beschreibt den tatsächlichen Stand von Bloom 0.12.0.
+Hier geht es von einem leeren Rechner bis zum laufenden Programm.
+Wenn etwas nicht klappt, schau am Ende in die Fehlersuche. Die Beispiele
+sind alle aus `examples/` und laufen wirklich, du kannst sie also
+kopieren und rumprobieren.
 
-## 1. Rust installieren
+## 1. Was du brauchst
 
-Der Bloom-Compiler ist in Rust geschrieben.
+Zwei Dinge:
 
-- Windows: <https://www.rust-lang.org/tools/install> (rustup-init.exe ausführen)
-- Linux/macOS: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+1. **Rust**, um den Compiler zu bauen.
+   Windows: <https://www.rust-lang.org/tools/install>, einfach
+   `rustup-init.exe` starten. Linux/macOS:
+   `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`.
+2. **Einen C-Compiler**, weil Bloom nach C übersetzt und den Rest dem
+   C-Compiler überlässt.
 
-Prüfen:
+Auf Windows reicht eins davon:
+
+- **Visual Studio Build Tools** mit „Desktop development with C++“
+  (<https://visualstudio.microsoft.com/visual-cpp-build-tools/>).
+  Bloom findet das über `vswhere.exe` von allein.
+- **Clang** (<https://releases.llvm.org/>), `clang.exe` muss im PATH
+  liegen.
+- **MinGW-w64 GCC**, z. B. von <https://winlibs.com/>.
+- **tcc** (<https://bellard.org/tcc/>), klein und schnell, aber nicht
+  bei jedem Kram dabei.
+
+Auf Linux/macOS tut es `gcc` oder `clang`.
+
+Kurz prüfen:
 
 ```bash
 rustc --version
 cargo --version
-```
-
-## 2. Einen C-Compiler einrichten
-
-Bloom 0.5 erzeugt C-Code und übersetzt ihn mit einem vorhandenen C-Compiler
-zu einem nativen Programm.
-
-### Windows
-
-Empfohlen (eine Option genügt):
-
-1. **Visual Studio Build Tools** mit dem Paket „Desktop development with C++“:
-   <https://visualstudio.microsoft.com/visual-cpp-build-tools/>
-   Bloom findet die Installation automatisch über `vswhere.exe`.
-2. **Clang** (LLVM): <https://releases.llvm.org/> – Installation, die
-   `clang.exe` in den PATH aufnimmt.
-3. **MinGW-w64 GCC**: z. B. über <https://winlibs.com/> – `gcc.exe` muss im PATH liegen.
-4. **Tiny C Compiler (tcc)**: <https://bellard.org/tcc/>
-
-Prüfen (je nach gewähltem Compiler):
-
-```bat
 cl
 clang --version
 gcc --version
-tcc -v
 ```
 
-### Linux / macOS
-
-```bash
-gcc --version      # oder clang --version
-```
-
-### Auswahl erzwingen
-
-Bloom probiert in dieser Reihenfolge: `BLOOM_CC`, MSVC, Clang, GCC, tcc.
+Bloom probiert der Reihe nach `BLOOM_CC`, MSVC, Clang, GCC und tcc.
+Wenn du einen bestimmten willst:
 
 ```bat
 set BLOOM_CC=clang
@@ -62,22 +51,17 @@ set BLOOM_CC=C:\pfad\zu\cl.exe
 export BLOOM_CC=clang
 ```
 
-Ohne gefundenen C-Compiler bricht `bloom build` mit Fehlercode E3002 ab und
-zeigt Einrichtungshinweise an.
-
-## 3. Den Compiler bauen
+## 2. Compiler bauen
 
 ```bash
 cd Bloom
 cargo build --release
 ```
 
-Ergebnis: `target\release\bloom.exe` (Windows) bzw. `target/release/bloom`.
+Danach liegt der Compiler unter `target\release\bloom.exe`. Wenn du
+willst, pack `target\release` in den PATH, dann geht `bloom` überall.
 
-Tipp: Das Verzeichnis `target/release` kann in den PATH aufgenommen werden,
-damit `bloom` überall verfügbar ist.
-
-## 4. Das erste Programm
+## 3. Hallo Welt
 
 `hello.blm`:
 
@@ -88,53 +72,29 @@ fn main() -> int {
 }
 ```
 
-Ausführen:
-
 ```bash
 bloom run hello.blm
 ```
-
-Ausgabe:
 
 ```text
 Hello from Bloom!
 ```
 
-Was dabei passiert:
+Was dabei passiert: Bloom liest den Quelltext, prüft Typen, schreibt
+C-Code, ruft den C-Compiler auf und startet am Ende die `.exe`. Das
+dauert beim ersten Mal ein oder zwei Sekunden, danach merkt man es
+kaum.
 
-1. Der Lexer zerlegt den Quelltext in Tokens.
-2. Der Parser baut daraus einen Syntaxbaum (AST).
-3. Die Typprüfung prüft alle Namen, Typen und Rückgabewerte.
-4. Der Codegenerator erzeugt C-Code (inklusive der eingebetteten Laufzeit).
-5. Ein C-Compiler (MSVC/Clang/GCC/tcc) erzeugt die native `.exe`.
-6. Das Programm wird gestartet.
-
-## 5. Natives Programm bauen
+## 4. Bauen und prüfen
 
 ```bash
-bloom build hello.blm
+bloom build hello.blm                  # hello.exe neben der Quelldatei
+bloom build hello.blm -o C:\tmp\hi.exe
+bloom build hello.blm --emit-c build\hello.c   # C-Code angucken
+bloom check hello.blm                  # nur prüfen, nichts bauen
 ```
 
-Erzeugt `hello.exe` neben der Quelldatei. Mit Zielangabe:
-
-```bash
-bloom build hello.blm -o C:\projekte\hello.exe
-```
-
-Den erzeugten C-Code ansehen:
-
-```bash
-bloom build hello.blm --emit-c build\hello.c
-```
-
-## 6. Nur prüfen
-
-```bash
-bloom check hello.blm
-```
-
-Führt Lexer, Parser und Typprüfung aus, erzeugt aber kein Programm.
-Fehlerhafte Programme liefern eine Meldung wie:
+`check` ist praktisch, wenn du nur wissen willst, ob alles stimmt:
 
 ```text
 error[E1002]: incompatible types: expected `int`, found `string`
@@ -146,16 +106,15 @@ error[E1002]: incompatible types: expected `int`, found `string`
   = help: the declared type is `int`
 ```
 
-## 7. Ein Projekt anlegen
+## 5. Ein Projekt anlegen
 
 ```bash
 bloom init HelloWorld
 cd HelloWorld
 bloom run
-bloom build
 ```
 
-Struktur:
+Das legt das hier an:
 
 ```text
 HelloWorld/
@@ -174,26 +133,36 @@ version = "0.2.0"
 entry = "src/main.blm"
 ```
 
-Im Projektverzeichnis liest `bloom build` und `bloom run` den Einstiegspunkt
-aus `bloom.toml`. `bloom build` legt das Programm unter `build/HelloWorld.exe` ab.
+Im Projektordner findet `bloom run` und `bloom build` den Einstieg
+selbst. Gebaut wird nach `build/HelloWorld.exe`.
 
-## 8. Eingaben
-
-`input("...")` liest eine Zeile von der Konsole:
+## 6. Variablen und Schleifen
 
 ```bloom
 fn main() -> int {
-    let name = input("Wie heißt du? ");
-    println("Hallo, " + name + "!");
+    let name = "Bloom";     // let = nicht änderbar
+    var counter = 0;        // var = änderbar
+
+    while counter < 3 {
+        println(name + " " + str(counter));
+        counter = counter + 1;
+    }
+
+    for i in 1..4 {         // 1, 2, 3 (Ende exklusiv)
+        if i == 2 {
+            continue;
+        }
+        println(str(i));
+    }
     return 0;
 }
 ```
 
-Ein vollständiges Beispiel mit Zahlen: `examples/calculator.blm`.
+`str(...)` macht aus Zahlen und Booleans Text, damit man sie mit
+Strings zusammenkleben kann. Mehr Beispiele: `examples/variables.blm`,
+`examples/loops.blm`.
 
-## 9. Structs
-
-Structs bündeln mehrere Werte unter einem Namen:
+## 7. Structs
 
 ```bloom
 struct Point {
@@ -202,39 +171,24 @@ struct Point {
 }
 
 fn main() -> int {
-    var p = Point {
-        x: 10,
-        y: 20
-    };
-
-    println(p.x);
-    println(p.y);
-
+    var p = Point { x: 10, y: 20 };
+    println(str(p.x));
     p.x = 100;
-    println(p.x);
-
+    println(str(p.x));
     return 0;
 }
 ```
 
-Wichtige Regeln:
+Ein paar Regeln, die immer wieder auftauchen:
 
-- Beim Erzeugen müssen **alle** Felder genau einmal angegeben werden.
-- Felder werden mit `.` gelesen und geschrieben (`p.x`).
-- Feldzuweisungen sind nur erlaubt, wenn die Variable mit `var` deklariert wurde.
-- Structs haben **Wertsemantik**: `var b = a;` erzeugt eine unabhängige Kopie.
-  Eine Änderung an `b.x` verändert `a.x` nicht.
-- Structs können als Funktionsparameter und Rückgabewerte verwendet werden.
-- Structs dürfen andere Structs als Felder enthalten (nicht sich selbst).
-- Ein vollständiges Beispiel: `examples/structs.blm`.
+- Beim Erzeugen müssen alle Felder genau einmal angegeben werden.
+- Felder schreibst du nur, wenn die Variable `var` ist.
+- Structs werden kopiert. `var b = a;` gibt dir eine unabhängige Kopie.
+- Structs dürfen andere Structs enthalten, aber nicht sich selbst.
 
-Nicht unterstützt in 0.5: Arrays von Structs/Enums, rekursive Structs/Enums,
-Vergleiche (`==`) zwischen Structs/Enums, direktes `println(p)` (einzelne
-Felder ausgeben), Structs als globale Variablen.
+Beispiel: `examples/structs.blm`.
 
-## 10. Methoden
-
-Methoden werden in `impl`-Blöcken definiert:
+## 8. Methoden
 
 ```bloom
 struct Counter {
@@ -249,31 +203,23 @@ impl Counter {
     fn inc(var self) -> void {
         self.n = self.n + 1;
     }
-
-    fn plus(self, k: int) -> Counter {
-        return Counter { n: self.n + k };
-    }
 }
 
 fn main() -> int {
     var c = Counter { n: 0 };
     c.inc();
     c.inc();
-    println(c.get());          // 2
-    println(c.plus(10).get()); // 12
+    println(str(c.get()));   // 2
     return 0;
 }
 ```
 
-Regeln:
+`self` liest nur, `var self` darf den Empfänger verändern. Für
+`var self` brauchst du eine `var`-Variable, auf einer `let`-Variable
+oder einem Zwischenergebnis geht es nicht. Beispiel:
+`examples/methods.blm`.
 
-- `self` liest den Empfänger (Wertkopie); `var self` verändert ihn in place.
-- `var self`-Methoden verlangen eine veränderliche Variable (`var`);
-  auf `let`-Werten oder Temporären sind sie Fehler.
-- Methodenketten sind erlaubt; Methoden dürfen sich gegenseitig aufrufen.
-- Vollständiges Beispiel: `examples/methods.blm`.
-
-## 11. Enums und Match
+## 9. Enums und match
 
 ```bloom
 enum Message {
@@ -289,17 +235,10 @@ fn size(m: Message) -> int {
         Message::Write(text) => len(text)
     };
 }
-
-fn main() -> int {
-    println(size(Message::Move { x: 3, y: 4 }));  // 7
-    println(size(Message::Write("hello")));       // 5
-    return 0;
-}
 ```
 
-- `match` muss **alle** Varianten abdecken (oder `_`); sonst Fehler E1041.
-- Bindungen (`text`, `x`) sind im Arm lokal.
-- Literal-Patterns und Guards sind erlaubt:
+`match` muss alle Varianten abdecken, sonst meckert der Compiler
+(E1041). Guards und Oder-Patterns gehen auch:
 
 ```bloom
 fn grade(score: int) -> string {
@@ -310,137 +249,7 @@ fn grade(score: int) -> string {
         _ => "F"
     };
 }
-```
 
-- `Option<T>` und `Result<T, E>` sind eingebaute Enums:
-
-```bloom
-fn divide(a: int, b: int) -> Result<int, string> {
-    if b == 0 {
-        return Result::Err("division by zero");
-    }
-    return Result::Ok(a / b);
-}
-```
-
-- Der `?`-Operator reicht Fehler automatisch weiter:
-
-```bloom
-fn half(a: int) -> Result<int, string> {
-    let q = divide(a, 2)?;   // bei Err sofort return Err(...)
-    return Result::Ok(q);
-}
-```
-
-Beispiele: `examples/enums.blm`, `examples/option_result.blm`,
-`examples/result_try.blm`.
-
-## 11a. Generics und Methoden auf Enums
-
-```bloom
-struct Box<T> {
-    value: T
-}
-
-impl<T> Box<T> {
-    fn get(self) -> T {
-        return self.value;
-    }
-}
-
-fn identity<T>(value: T) -> T {
-    return value;
-}
-
-enum Shape {
-    Circle(float),
-    Square(float)
-}
-
-impl Shape {
-    fn circle(radius: float) -> Shape {
-        return Shape::Circle(radius);
-    }
-
-    fn area(self) -> float {
-        return match self {
-            Shape::Circle(r) => 3.14159 * r * r,
-            Shape::Square(s) => s * s
-        };
-    }
-}
-
-fn main() -> int {
-    let b = Box { value: 42 };        // T = int (Inferenz)
-    println(b.get());
-    println(identity("text"));        // T = string
-    println(identity::<int>(7));      // Turbofish
-    println(str(Shape::circle(2.0).area()));
-    return 0;
-}
-```
-
-- Typparameter werden aus Argumenten, erwartetem Rückgabetyp oder explizit
-  (`::<...>`) bestimmt; nicht ableitbare Fälle sind E1045.
-- `Type::funktion(...)` ruft assoziierte Funktionen (ohne `self`) auf.
-- Beispiele: `examples/generics.blm`, `examples/enum_methods.blm`.
-
-## 11b. Text- und Array-Funktionen
-
-```bloom
-fn main() -> int {
-    let s = "  Hello, World  ";
-    let clean = trim(s);
-    println(contains(clean, "World"));   // true
-    println(starts_with(clean, "Hello")); // true
-    println(replace(clean, "World", "Bloom"));
-    println(to_upper(clean));            // HELLO, WORLD
-    let words = split(clean, ", ");      // [string]
-    println(words[1]);
-
-    var xs: [int] = [1, 2, 3];
-    let last = pop(xs);                  // Option<int>
-    insert(xs, 0, 10);
-    let removed = remove(xs, 1);         // Option<int>
-    let part = slice(xs, 0, 2);          // Kopie des Bereichs
-    println(join(words, " | "));         // join über [string]
-    return 0;
-}
-```
-
-Beispiele: `examples/text_tools.blm`, `examples/collections.blm`.
-
-## 11c. Fehlerbehandlung, `panic` und `std.math`
-
-```bloom
-use std::math;
-
-fn first(o: Option<int>) -> Option<int> {
-    let v = o?;                          // None wird weitergereicht
-    return Option::Some(v + 1);
-}
-
-fn check(n: int) -> int {
-    if n < 0 {
-        panic("negative input");         // Exit 70 mit Meldung + Zeile
-    }
-    return n;
-}
-
-fn main() -> int {
-    println(str(math::sqrt(81.0)));      // 9.0
-    println(match first(Option::None) {
-        Option::Some(v) => str(v),
-        Option::None => "none"
-    });
-    println(check(5));
-    return 0;
-}
-```
-
-## 11d. Oder-Patterns
-
-```bloom
 fn classify(n: int) -> string {
     return match n {
         1 | 2 | 3 => "small",
@@ -450,224 +259,196 @@ fn classify(n: int) -> string {
 }
 ```
 
-Alle Alternativen müssen dieselben Bindungen einführen (oder keine).
+`Option` und `Result` sind eingebaute Enums:
 
-## 11e. Speicherverwaltung
+```bloom
+fn divide(a: int, b: int) -> Result<int, string> {
+    if b == 0 {
+        return Result::Err("division by zero");
+    }
+    return Result::Ok(a / b);
+}
 
-Strings, Arrays, Slice-Views und Structs/Enums mit verwalteten Feldern
-werden per **Referenzzählung** verwaltet und deterministisch freigegeben.
-Du musst nichts tun: Speichern, Überschreiben, Blöcke, `return`, `break`,
-`continue` und der `?`-Fehlerpfad werden vom Compiler korrekt behandelt.
-Mit `BLOOM_MEM_REPORT=1` gibt das Programm am Ende die Zahl offener
-Allokationen auf stderr aus (`live allocations: 0` = kein Leak). Details:
+fn half(a: int) -> Result<int, string> {
+    let q = divide(a, 2)?;    // bei Err sofort weiterreichen
+    return Result::Ok(q);
+}
+```
+
+Beispiele: `examples/enums.blm`, `examples/option_result.blm`,
+`examples/result_try.blm`.
+
+## 10. Generics
+
+```bloom
+struct Box<T> {
+    value: T
+}
+
+fn identity<T>(value: T) -> T {
+    return value;
+}
+
+fn main() -> int {
+    let b = Box { value: 42 };    // T wird erkannt
+    println(str(b.value));
+    println(identity("text"));    // T = string
+    println(str(identity::<int>(7)));  // explizit, wenn es nicht klar ist
+    return 0;
+}
+```
+
+Läuft wie in Rust, nur ohne den ganzen Trait-Kram. Beispiele:
+`examples/generics.blm`, `examples/enum_methods.blm`.
+
+## 11. Strings und Arrays
+
+```bloom
+fn main() -> int {
+    let s = "  Hello, World  ";
+    let clean = trim(s);
+
+    println(str(contains(clean, "World")));
+    println(str(starts_with(clean, "Hello")));
+    println(replace(clean, "World", "Bloom"));
+    println(to_upper(clean));
+
+    let words = split(clean, ", ");
+    println(words[1]);
+
+    var xs: [int] = [1, 2, 3];
+    push(xs, 4);
+    let last = pop(xs);         // Option<int>
+    insert(xs, 0, 10);
+    let removed = remove(xs, 1); // Option<int>
+    let part = slice(xs, 0, 2);  // Kopie
+    println(join(words, " | "));
+    return 0;
+}
+```
+
+Arrays haben `push`, `pop`, `insert`, `remove` und `slice`. `slice`
+kopiert, `slice_view` nicht (siehe unten). Beispiele:
+`examples/strings.blm`, `examples/arrays.blm`,
+`examples/collections.blm`.
+
+## 12. Speicher
+
+Strings, Arrays und alles, was die drin hat, wird per
+**Referenzzählung** verwaltet. Du musst nichts freigeben und nichts
+kopieren, der Compiler hängt an jedem Ausgang aus einem Block die
+passenden Zähler-Anpassungen dran. Auch beim `?`-Fehlerpfad.
+
+Prüfen kannst du das so:
+
+```bash
+set BLOOM_MEM_REPORT=1
+bloom run examples/strings.blm
+```
+
+Am Ende steht auf stderr `live allocations: 0`. Steht da was anderes,
+ist irgendwo ein Leck. Details und Grenzen stehen in
 `docs/MEMORY_MODEL.md`.
 
-## 11f. Slice-Views
-
-Ein Slice-View zeigt auf einen Bereich eines Arrays, ohne Elemente zu
-kopieren:
+Slice-Views sind der einzige Ort, an dem man aufpassen muss:
 
 ```bloom
 var values = [10, 20, 30, 40, 50];
-let view = slice_view(values, 1, 4);   // [1, 4): 20, 30, 40
-println(len(view));                    // 3
-println(view[1]);                      // 30
+let view = slice_view(values, 1, 4);   // 20, 30, 40 (ohne Kopie)
+println(str(len(view)));
+println(str(view[1]));
 
-values[2] = 99;                        // sichtbar ueber den View
-println(view[1]);                      // 99
+values[2] = 99;      // sieht man durch den View
+println(str(view[1]));
 
 var writable = slice_view(values, 0, 3);
-writable[0] = 7;                       // schreibt ins Array
+writable[0] = 7;     // schreibt ins Original
 ```
 
-- `slice_view` erzeugt einen View; `slice` erzeugt weiterhin eine Kopie.
-- Views bleiben gueltig, wenn das Array waechst (`push`).
-- `insert`, `remove` und ein erfolgreiches `pop` **invalidieren** alle
-  Views; ein spaeterer Zugriff meldet einen Laufzeitfehler.
-- Schreiben ueber einen View verlangt `var view = ...` (wie bei Arrays).
+`push` macht Views nicht kaputt. `insert`, `remove` und ein
+erfolgreiches `pop` invalidieren sie aber, danach gibt es einen
+Laufzeitfehler statt eines Absturzes. Beispiel: `examples/slices.blm`.
 
-Beispiel: `examples/slices.blm`.
-
-## 11g. Dateien, Prozesse und Zeit
+## 13. Dateien, Prozesse, Zeit
 
 ```bloom
 use std::fs;
 use std::process;
 use std::time;
 
-fn main() -> int {
-    // Dateien: alles ueber Result
+fn run() -> Result<int, string> {
     fs::write_text("demo.txt", "Hallo\n")?;
-    let text = fs::read_text("demo.txt")?;
-    print(text);
+    print(fs::read_text("demo.txt")?);
     fs::remove_file("demo.txt")?;
 
-    // Prozesse: Programm und Argumente getrennt, keine Shell
+    // Programm und Argumente getrennt, keine Shell dazwischen
     let out = process::run("cmd.exe", ["/C", "echo", "fertig"])?;
     println(out.stdout);
-    println("exit: " + str(out.exit_code));
 
-    // Zeit
     println(time::format_utc(time::unix_seconds()));
     let t0 = time::monotonic_millis();
     time::sleep_ms(10);
-    println("gedauert (ms): " + str(time::monotonic_millis() - t0));
-    return 0;
+    println(str(time::monotonic_millis() - t0));
+    return Result::Ok(0);
 }
-```
 
-Beispiele: `examples/file_io.blm`, `examples/process.blm`,
-`examples/time.blm`.
-
-## 11h. Quellcode formatieren
-
-```bash
-bloom fmt src/main.blm      # formatiert (sicherer Schreibvorgang)
-bloom fmt src/              # alle .blm-Dateien rekursiv
-bloom fmt --check src/      # nur pruefen; Exit-Code 1 bei Abweichungen
-```
-
-Der Formatter erhaelt alle Kommentare und Literale, ist idempotent und
-schreibt bei Syntaxfehlern nichts.
-
-## 11i. FFI, Windows-API, Netzwerk, HTTP und TLS
-
-```bloom
-extern "system" {
-    fn GetCurrentProcessId() -> c_uint;
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
 }
 
 fn main() -> int {
-    unsafe {
-        println(str(int(GetCurrentProcessId())));   // FFI nur in unsafe
-    }
-    return 0;
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
 }
 ```
 
-```bloom
-use std::win32;
-use std::net;
-use std::http;
+`?` geht nur in Funktionen, die selbst `Result` zurückgeben. `main`
+muss `int` liefern, deshalb steckt die eigentliche Arbeit in `run()`.
+In den nächsten Abschnitten lasse ich `main` weg, damit es nicht
+ständig gleich aussieht.
 
-fn main() -> int {
-    println(str(win32::process_id()));
+Alles, was schiefgehen kann, kommt als `Result` zurück, es gibt keine
+Exceptions. Beispiele: `examples/file_io.blm`,
+`examples/process.blm`, `examples/time.blm`.
 
-    let listener = match net::tcp_listen("127.0.0.1", 0, 4) {
-        Result::Ok(h) => h,
-        Result::Err(e) => return 1
-    };
-    println(str(match net::local_port(listener) {
-        Result::Ok(p) => p,
-        Result::Err(e) => 0
-    }));
-
-    match http::get("http://127.0.0.1:8080/") {
-        Result::Ok(r) => println(str(r.status) + " " + r.body),
-        Result::Err(e) => println(e)
-    };
-    return 0;
-}
-```
-
-Bibliotheken linken: `bloom run --link user32 prog.blm` oder in
-`bloom.toml` unter `[build] link_libraries = ["user32"]`.
-
-Beispiele: `examples/ffi_basic.blm`, `examples/win32_info.blm`,
-`examples/tcp_client.blm`, `examples/tcp_server.blm`,
-`examples/http_get.blm`, `examples/http_server.blm`.
-
-### HTTPS mit `std.tls` (Windows)
-
-```bloom
-use std::http;
-
-fn main() -> int {
-    // System-Trust (Windows-Zertifikatsspeicher); das Zertifikat wird
-    // immer geprüft, es gibt keinen unsicheren Modus.
-    match http::get("https://example.com/") {
-        Result::Ok(r) => println(str(r.status) + " " + r.body),
-        Result::Err(e) => println("Fehler: " + e)
-    };
-
-    // Eigene CA-Datei (PEM oder DER, erstes Zertifikat):
-    match http::get_with_ca("https://127.0.0.1:8443/", "meine-ca.der") {
-        Result::Ok(r) => println(str(r.status)),
-        Result::Err(e) => println("Fehler: " + e)
-    };
-    return 0;
-}
-```
-
-Roh-TLS ohne HTTP geht über `use std::tls;`:
-`tls_connect`, `tls_connect_with_ca`, `tls_connect_ex`,
-`tls_read`, `tls_write_all`, `tls_close`, `tls_set_timeout`.
-Chunked-Antworten (`Transfer-Encoding: chunked`) und -Anfragen werden
-automatisch dekodiert. Beispiel: `examples/https_client.blm`.
-
-### JSON und Pfade (`std.json`, `std.path`)
+## 14. JSON und Pfade
 
 ```bloom
 use std::json;
 use std::path;
 
-fn main() -> int {
-    // JSON parsen, Felder lesen, hübsch ausgeben
-    let doc = match json::parse("{\"name\": \"Ada\", \"age\": 36}") {
-        Result::Ok(v) => v,
-        Result::Err(e) => {
-            println("FEHLER: " + e);
-            return 1;
-        }
-    };
-    println(json::get_string(doc, "name"));
-    match json::stringify_pretty(doc) {
-        Result::Ok(text) => println(text),
-        Result::Err(e) => println("FEHLER: " + e)
-    };
+fn run() -> Result<int, string> {
+    let doc = json::parse("{\"name\": \"Ada\", \"age\": 36}")?;
+    println(json::get_string(doc, "name")?);
 
-    // Neue Werte konstruieren (das Handle wird automatisch freigegeben)
     let cfg = json::make_object();
     json::set(cfg, "debug", json::make_bool(true));
-    let list = json::make_array();
-    json::push(list, json::make_string("a"));
-    json::set(cfg, "paths", list);
-    match json::stringify(cfg) {
-        Result::Ok(text) => println(text),
-        Result::Err(e) => println("FEHLER: " + e)
-    };
+    println(json::stringify(cfg)?);
 
-    // Pfade: rein lexikalisch, ohne Dateisystemzugriff
-    let file = path::join("C:\\projekte", "src\\main.blm");
-    println(file);
-    match path::normalize("C:\\projekte\\src\\..\\tests") {
-        Result::Ok(v) => println(v),
-        Result::Err(e) => println("FEHLER: " + e)
-    };
-    return 0;
+    println(path::join("C:\\projekte", "src\\main.blm"));
+    return Result::Ok(0);
 }
 ```
 
-`std::json` arbeitet mit referenzgezählten Werten: Kopieren hält sie am
-Leben, der Gültigkeitsbereich gibt sie frei — kein manuelles Aufräumen.
-Fehler beim Parsen enthalten Byte-Position, Zeile und Spalte.
-`std::path` löst nur lexikalisch auf (keine Symlinks, keine
-Existenzprüfung); Dateisystemzugriffe laufen weiter über `std::fs`.
-Beispiele: `examples/json_parse.blm`, `examples/json_create.blm`,
-`examples/json_pretty.blm`, `examples/json_file_config.blm`,
+JSON-Werte werden wie alles andere automatisch freigegeben. `std::path`
+arbeitet nur mit dem Text des Pfads, es schaut nicht auf die Platte.
+Echte Dateizugriffe laufen über `std::fs`. Beispiele:
+`examples/json_parse.blm`, `examples/json_create.blm`,
 `examples/path_operations.blm`.
 
-### HTML und Templates (`std.html`)
+## 15. HTML-Vorlagen
 
 ```bloom
 use std::html;
 use std::json;
 
-fn main() -> int {
-    println(html::escape("<b>Tom & Jerry</b>"));
-
+fn run() -> Result<int, string> {
     let data = json::make_object();
     json::set(data, "title", json::make_string("Benutzer"));
+
     let users = json::make_array();
     let a = json::make_object();
     json::set(a, "name", json::make_string("Ada <admin>"));
@@ -675,29 +456,112 @@ fn main() -> int {
     json::set(data, "users", users);
 
     let src = "<h1>{{title}}</h1><ul>{{#each users}}<li>{{this.name}}</li>{{/each}}</ul>";
-    match html::template(src) {
-        Result::Ok(t) => match html::render(t, data) {
-            Result::Ok(page) => println(page),
-            Result::Err(e) => println("FEHLER: " + e)
-        },
-        Result::Err(e) => println("FEHLER: " + e)
+    let t = html::template(src)?;
+    println(html::render(t, data)?);
+    return Result::Ok(0);
+}
+```
+
+`{{...}}` wird automatisch escaped, `{{#if}}`/`{{else}}` und
+`{{#each}}` gibt es auch. Was nicht passt (fehlender Wert, `null`,
+Array da wo Text hin soll), ist ein Fehler und kein stiller leerer
+String. `<script>` und `<style>` lehnt der Parser ab.
+
+Seit 0.15 kannst du Vorlagen auch aus Dateien laden:
+
+```bloom
+let t = html::template_file("templates/seite.html")?;          // direkt
+let t2 = html::template_file_from("templates", "seite.html")?; // mit Wurzelordner
+```
+
+Die Datei darf maximal 64 KiB groß und muss gültiges UTF-8 sein.
+`template_file_from` nimmt einen relativen Pfad, verhindert `..` und
+prüft nach dem Öffnen, ob die Datei wirklich im Ordner liegt. Auch
+wenn ein Symlink oder eine Junction woanders hinzeigt: gibt Ärger.
+
+Über HTTP schicken: `html::render_page(conn, 200, t, data)`.
+
+## 16. HTTP, Web-Routing und statische Dateien
+
+Kleiner Server, der JSON zurückgibt:
+
+```bloom
+use std::web;
+use std::http;
+use std::net;
+
+fn run() -> Result<int, string> {
+    let router = web::router();
+    web::route(router, "GET", "/users/:id", "user")?;
+
+    let listener = net::tcp_listen("127.0.0.1", 8080, 8)?;
+    let conn = net::tcp_accept(listener)?;
+    let request = http::read_request(conn)?;
+
+    let m = web::resolve_request(router, request)?;
+    if m.name == "user" {
+        web::json_response(conn, 200, m.params)?;
+    } else {
+        http::write_response(conn, 404, "text/plain; charset=utf-8", "nope")?;
+    }
+    net::tcp_close(conn);
+    return Result::Ok(0);
+}
+```
+
+Dateien aus einem Ordner ausliefern geht ohne Router:
+
+```bloom
+match web::static_file(conn, "public", request) {
+    Result::Ok(status) => println("gesendet: " + str(status)),
+    Result::Err(e) => println("Schreibfehler: " + e)
+};
+```
+
+`static_file` macht GET und HEAD, rät den Content-Type aus der Endung,
+schickt `nosniff` mit und antwortet mit 404 wenn die Datei fehlt, 400
+wenn jemand mit `..` oder Symlinks aus dem Ordner rauswill und 500 bei
+Lesefehlern oder Dateien über 8 MiB.
+
+Wenn du Binärdaten schicken willst (Bilder, ZIPs, whatever):
+
+```bloom
+use std::fs;
+use std::http;
+
+fn send_logo(conn: int) -> Result<bool, string> {
+    let bytes = fs::read_bytes("logo.png")?;
+    return http::write_response_bytes(conn, 200, "image/png", "", bytes);
+}
+```
+
+`write_response_bytes_head` macht das Gleiche, lässt aber den Body weg,
+für HEAD-Requests.
+
+Beispiele: `examples/web_router.blm`, `examples/web_json_api.blm`,
+`examples/web_static_files.blm`, `examples/web_html_site.blm`.
+
+## 17. HTTPS
+
+```bloom
+use std::http;
+
+fn main() -> int {
+    match http::get("https://example.com/") {
+        Result::Ok(r) => println(str(r.status)),
+        Result::Err(e) => println("Fehler: " + e)
     };
     return 0;
 }
 ```
 
-Platzhalter werden **automatisch HTML-escaped**; `{{#if …}}`/`{{else}}`
-und `{{#each …}}` (mit `{{this}}`) ergänzen Bedingungen und Schleifen.
-Fehlende Werte, `null`, Arrays/Objekte sowie kaputte Vorlagen sind
-kontrollierte Fehler; `<script>`/`<style>` werden abgelehnt. Escaping
-schützt HTML-Text und quotierte Attribute, **nicht** JavaScript-,
-CSS- oder URL-Kontexte. Über HTTP senden: `html::render_page(conn, 200,
-t, data)` (setzt `Content-Type: text/html; charset=utf-8`).
-Beispiele: `examples/html_escape.blm`, `examples/template_basic.blm`,
-`examples/template_conditions.blm`, `examples/template_lists.blm`,
-`examples/template_errors.blm`, `examples/web_html_page.blm`.
+Das Zertifikat wird immer geprüft, einen „unsicher“-Schalter gibt es
+nicht. Für eine eigene CA: `http::get_with_ca(url, "meine-ca.der")`.
+Roh-TLS ohne HTTP geht über `use std::tls;` mit `tls_connect`,
+`tls_read`, `tls_write_all` und so weiter. Beispiel:
+`examples/https_client.blm`.
 
-## 12. Module und mehrere Dateien
+## 18. Module
 
 `src/main.blm`:
 
@@ -706,7 +570,7 @@ use shapes;
 
 fn main() -> int {
     let r = shapes::Rectangle { width: 3, height: 4 };
-    println(shapes::area(r));
+    println(str(shapes::area(r)));
     return 0;
 }
 ```
@@ -719,48 +583,75 @@ pub struct Rectangle {
     height: int
 }
 
-impl Rectangle {
-    pub fn area(self) -> int {
-        return self.width * self.height;
-    }
-}
-
 pub fn area(r: Rectangle) -> int {
-    return r.area();
+    return r.width * r.height;
 }
 ```
 
-- `use shapes;` lädt `shapes.blm` (oder `shapes/mod.blm`) relativ zur
-  importierenden Datei, sonst relativ zum Einstiegsverzeichnis.
-- `use shapes::Rectangle;` importiert ein einzelnes Symbol.
-- Nur `pub`-Symbole sind außerhalb ihres Moduls sichtbar.
-- `pub use geometry::Point;` re-exportiert ein Symbol aus einem anderen
-  Modul, sodass andere es über dieses Modul importieren können.
-- Vollständiges Projekt: `examples/modules_project/` (mit `bloom.toml`).
+`use shapes;` sucht `shapes.blm` (oder `shapes/mod.blm`) neben der
+Datei, die importiert. Nur `pub`-Sachen sieht man von außen.
+`pub use` re-exportiert Symbole weiter. Volles Beispiel:
+`examples/modules_project/`.
 
-## 13. Nächste Schritte
+## 19. C und Windows
 
-- `docs/LANGUAGE_SPEC.md` – alle Sprachregeln im Detail
-- `docs/MEMORY_MODEL.md` – Speicherverwaltung heute und Empfehlung
-- `examples/` – lauffähige Programme (Schleifen, Arrays, Strings, Generics …)
-- `docs/COMPILER_ARCHITECTURE.md` – wie der Compiler intern arbeitet
+```bloom
+extern "system" {
+    fn GetCurrentProcessId() -> c_uint;
+}
+
+fn main() -> int {
+    unsafe {
+        println(str(int(GetCurrentProcessId())));
+    }
+    return 0;
+}
+```
+
+Externe Aufrufe gehen nur in `unsafe`-Blöcken. Bibliotheken hängst du
+mit `--link` an oder in `bloom.toml`:
+
+```toml
+[build]
+link_libraries = ["user32"]
+```
+
+Ein paar Windows-Funktionen sind schon fertig eingepackt:
+`use std::win32;` mit `process_id`, `message_box`, `get_computer_name`
+und so weiter. Beispiele: `examples/ffi_basic.blm`,
+`examples/win32_info.blm`.
+
+## 20. Formatieren
+
+```bash
+bloom fmt src/main.blm    # eine Datei
+bloom fmt src/            # alles rekursiv
+bloom fmt --check src/    # nur prüfen, Exit 1 bei Unterschieden
+```
+
+Der Formatter lässt Kommentare und Strings in Ruhe, ist idempotent und
+schreibt bei Syntaxfehlern gar nichts.
 
 ## Fehlersuche
 
-**„error[E3002]: kein C-Compiler gefunden“**
-Kein MSVC/Clang/GCC/tcc gefunden. Compiler installieren (siehe Schritt 2) oder
+**`error[E3002]: kein C-Compiler gefunden`**
+Kein MSVC/Clang/GCC/tcc gefunden. Installieren (Schritt 1) oder
 `BLOOM_CC` setzen.
 
-**„error[E3003]: native Kompilierung fehlgeschlagen“**
-Der C-Compiler wurde aufgerufen, hat aber Fehler gemeldet. Die Ausgabe des
-C-Compilers wird mit angezeigt. Handelt es sich um einen Compilerfehler in
-generiertem Code, ist das ein Bloom-Fehler und sollte gemeldet werden.
+**`error[E3003]: native Kompilierung fehlgeschlagen`**
+Der C-Compiler hat gemeckert. Seine Ausgabe steht direkt darunter. Wenn
+der Fehler im generierten C-Code liegt, ist das ein Bloom-Bug und
+gehört gemeldet.
 
-**Umlaute/Kyrillisch erscheinen falsch (Konsole)**
-Die Bloom-Laufzeit stellt die Windows-Konsole auf UTF-8 (CP 65001) um. In sehr
-alten Terminals kann die Darstellung trotzdem eingeschränkt sein; die Bytes im
-Programm sind immer UTF-8.
+**Umlaute sehen in der Konsole komisch aus**
+Bloom stellt die Windows-Konsole auf UTF-8 um. In alten Terminals
+bleibt es manchmal trotzdem kaputt, im Programm selbst sind die Bytes
+aber immer UTF-8.
 
-**„cannot find `x` in this scope“**
-Variablen müssen vor ihrer Verwendung deklariert werden. Funktionen dürfen
-dagegen an beliebiger Stelle im File stehen und sich gegenseitig aufrufen.
+**`cannot find 'x' in this scope`**
+Variablen müssen vor der Benutzung deklariert sein. Funktionen dürfen
+dagegen überall in der Datei stehen.
+
+**Der `?`-Operator funktioniert nicht**
+Die Funktion muss dann selbst `Result<...>` oder `Option<...>`
+zurückgeben. In `fn main() -> int` geht `?` nicht.

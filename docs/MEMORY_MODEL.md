@@ -1,12 +1,9 @@
-# Bloom Speichermodell – Referenzzählung (Version 0.12.0)
+# Wie Bloom Speicher verwaltet
 
-Stand: Version 0.15.0. Dieses Dokument beschreibt das **implementierte**
-Referenzzählungsmodell, die Ownership-Regeln des generierten C-Codes, die
-Instrumentierung und die verbleibenden Grenzen.
+Stand: 0.15.0. Bloom zählt Referenzen. Jeder Wert weiß, wie viele Stellen
+ihn gerade benutzen, und gibt sich selbst frei, wenn keiner mehr da ist.
+Kein GC, der irgendwann aufräumt, und kein `free()` im Anwendungscode.
 
-## 1. Überblick
-
-Bloom verwaltet Heap-Speicher mit **deterministischer Referenzzählung (RC)**.
 Betroffen sind:
 
 - `string` – unveränderliche UTF-8-Bytes,
@@ -14,16 +11,16 @@ Betroffen sind:
 - `Slice<T>` – Views auf Array-Bereiche (zählen den Header mit),
 - Structs und Enums, die solche Werte (rekursiv) enthalten.
 
-`int`, `float`, `bool`, `char` und Typen ohne verwaltete Felder benötigen
-keine Zählung und erzeugen keinen Heap-Verkehr.
+`int`, `float`, `bool`, `char` und Typen ohne verwaltete Felder brauchen
+nichts davon und erzeugen auch keinen Heap-Verkehr.
 
-Das Modell ist **nicht threadsicher**. Bloom bietet derzeit keine sichere
-gemeinsame Speichernutzung über Threads an; die Zähleroperationen sind
-einfache `size_t`-Inkremente ohne Atomik. Sobald Threads eingeführt werden,
-muss das Modell überarbeitet werden (atomare Zähler, Nebenläufigkeitsregeln
-für geteilte veränderbare Arrays — eigenständiges Architekturprojekt).
+Das Modell ist **nicht threadsicher**. Es gibt ja noch keine Threads, und
+die Zähler sind einfache `size_t`-Inkremente ohne Atomik. Wenn Threads
+kommen, muss das hier neu gedacht werden (atomare Zähler und Regeln für
+geteilte veränderbare Arrays). Das ist ein eigenes Projekt, nichts, was
+man mal eben mit einbaut.
 
-## 2. Laufzeit-Repräsentation
+## 1. Laufzeit-Repräsentation
 
 ### Strings
 
@@ -103,7 +100,7 @@ nach dem Drop wird `tag = -1` gesetzt (idempotent, doppelte Freigabe
 unmöglich). Für Structs/Enums ohne verwaltete Felder werden keine
 Hilfsfunktionen erzeugt und keine Zähleroperationen ausgeführt.
 
-## 3. Ownership-Regeln des generierten Codes
+## 2. Ownership-Regeln des generierten Codes
 
 Das Modell ist eine **Besitzdisziplin pro Variablen-Slot und pro
 Statement** (keine benutzersichtbare Borrow-Syntax):
@@ -138,7 +135,7 @@ Die Hilfsfunktionen sind so gebaut, dass NULL/`{0}`-Werte No-Ops sind;
 `drop` ist idempotent. Es gibt keine ungeprüfte Zählerarithmetik, die zu
 ungültigem Speicher führen könnte.
 
-## 4. Fehlerfälle und Invarianten
+## 3. Fehlerfälle und Invarianten
 
 - **Allokationsfehler** (OOM) führen zu einem definierten Laufzeitfehler
   (Exit 70), nicht zu undefiniertem Verhalten.
@@ -150,7 +147,7 @@ ungültigem Speicher führen könnte.
   sind gültige Zustände; Drop-Operationen prüfen auf NULL.
 - **Statische Literale**: unsterblich, `clone`/`drop` No-Ops.
 
-## 5. Instrumentierung und Tests
+## 4. Instrumentierung und Tests
 
 Die Laufzeit führt einen globalen Zähler offener Allokationen
 (`bloom_live_allocs`) und offener Sockets (`bloom_live_sockets`, inklusive
@@ -218,7 +215,7 @@ absichtlichen Laufzeitfehlers (z. B. invalidierter View oder
 regulären Cleanup und werden deshalb nicht mit dem Leak-Kriterium
 bewertet — der Runtime-Fehlerpfad ist separat getestet.
 
-## 6. Grenzen des Modells
+## 5. Grenzen des Modells
 
 - **`slice` kopiert, `slice_view` referenziert**: Beide bleiben bestehen;
   `slice` hat Kopiesemantik, `slice_view` liefert einen Header-zählenden
@@ -240,5 +237,5 @@ bewertet — der Runtime-Fehlerpfad ist separat getestet.
 - **`panic` gibt nichts frei**: `panic` beendet den Prozess direkt
   (Exit 70); laufende Cleanup-Pfade werden nicht durchlaufen. Das ist
   dokumentiert und beabsichtigt.
-- **Nicht threadsicher** (siehe Abschnitt 1).
+- **Nicht threadsicher** (siehe oben).
 - **Statische Literale** belegen Programmspeicher (kein Heap).
