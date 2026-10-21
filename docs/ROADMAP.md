@@ -342,7 +342,45 @@ Vertagt (weiterhin geplant):
 Vertagt (weiterhin geplant):
 
 - Template-Includes, Makros, ausführbare Ausdrücke, Raw-HTML
-- Kontextabhängige URL-/JavaScript-Escapierung, statische Inhalte
+- Kontextabhängige URL-/JavaScript-Escapierung
+- GUI-Anbindung (aufbauend auf `std::win32`)
+- WebSocket, JSON-Streaming, Datenbankabstraktion
+
+## Version 0.15.0 – Dateien, Bytes und statische Inhalte (implementiert)
+
+- **`std.fs`-Erweiterung:** `read_text_limited(path, limit)` prüft die
+  Dateigröße **vor** dem Lesen (UTF-8-Validierung wie `read_text`);
+  `read_bytes` liefert binäre Inhalte als refcountetes
+  `std.fs::Bytes`-Handle (`Type::Bytes`, Bauart wie `JsonValue`),
+  `bytes_len` die Länge; NUL-Bytes bleiben erhalten, Obergrenze 8 MiB
+- **Binäre HTTP-Antworten:** `http::write_response_bytes` und
+  `write_response_bytes_head` senden einen `Bytes`-Puffer mit exakter
+  Byte-Länge (kein UTF-8-Zwang); `_head` liefert dieselben Kopfzeilen
+  ohne Body; `204`/`304` bleiben bodylos; Content-Type/Zusatz-Header
+  werden wie bisher validiert (CR/LF vor dem Schreiben abgelehnt)
+- **Vorlagen aus Dateien:** `html::template_file(path)` und
+  `html::template_file_from(root, relative)` laden und parsen mit
+  demselben Parser/Limit (64 KiB); der relative Pfad wird validiert
+  (`..`, absolute Pfade, Laufwerks-/UNC-Präfixe sind Fehler) und die
+  geöffnete Datei gegen den Wurzelordner geprüft (Symlinks/Junctions
+  inklusive); UTF-8 wird vor dem Parsen geprüft; kein Neuladen
+- **`web::static_file(connection, root, request)`:** `GET`/`HEAD`
+  (sonst `405` mit `Allow: GET, HEAD`); Pfad einmal prozentdekodiert,
+  kodierte Trenner/`..`/absolute Pfade → `400`; fehlende Dateien `404`,
+  Lesefehler und > 8 MiB → `500`; MIME-Tabelle nach Endung (unbekannt:
+  `application/octet-stream`) plus `X-Content-Type-Options: nosniff`;
+  vollständig gepuffert (kein Streaming/Range/ETag), kein
+  `index.html`-Fallback
+- **Beispiele:** `template_file`, `web_static_files`, `web_html_site`,
+  `web_static_errors`
+- 486 Tests (318 Unit + 168 E2E), darunter Binär-/MIME-/HEAD-/404-/405-/
+  Traversal-/Junction-/Limit-/Leak-Tests
+
+Vertagt (weiterhin geplant):
+
+- Streaming/Range-Requests, ETag/Last-Modified, Verzeichnis-Indizes,
+  automatisches Neuladen von Dateien
+- Template-Includes, Makros, ausführbare Ausdrücke, Raw-HTML
 - GUI-Anbindung (aufbauend auf `std::win32`)
 - WebSocket, JSON-Streaming, Datenbankabstraktion
 

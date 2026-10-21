@@ -5,7 +5,7 @@ die Klarheit und Systemnähe von C mit einer modernen, gut lesbaren Syntax und
 orientiert sich langfristig an der Ausdruckskraft von C++ – ohne deren
 historischen Ballast zu übernehmen.
 
-**Aktueller Stand: Version 0.14.0.** Der Compiler ist vollständig implementiert:
+**Aktueller Stand: Version 0.15.0.** Der Compiler ist vollständig implementiert:
 Lexer, Parser, Typprüfung, Codegenerierung nach C und native Kompilierung mit
 MSVC, Clang, GCC oder tcc. Heap-Speicher wird per **Referenzzählung**
 deterministisch freigegeben; **Slice-Views** erlauben referenzierende
@@ -15,8 +15,11 @@ Array-Ausschnitte ohne Kopien. Seit 0.11.0 gibt es einen **TLS-Client**
 Wertmodell, Serializer) und **`std.path`** (lexikalische
 Pfadoperationen) hinzu; seit 0.13.0 **`std.web`** — ein synchroner
 REST-Router mit Pfad-/Query-Parametern und JSON-Hilfen; seit 0.14.0
-**`std.html`** — sichere HTML-Escapierung und eine kleine Template-Engine
-mit Bedingungen, Schleifen und automatischer Escapierung.
+**`std.html`** – sichere HTML-Escapierung und eine kleine Template-Engine
+mit Bedingungen, Schleifen und automatischer Escapierung; seit 0.15.0
+**Vorlagen aus Dateien** (`html::template_file`/`template_file_from`),
+**binäre HTTP-Antworten** über `std.fs::Bytes` (`http::write_response_bytes`)
+und **statische Dateien** mit Wurzelordner-Schutz (`web::static_file`).
 
 ```bloom
 struct Pair<A, B> {
@@ -71,7 +74,7 @@ fn main() -> int {
 }
 ```
 
-## Was Bloom 0.14.0 kann
+## Was Bloom 0.15.0 kann
 
 - Native `.exe`-Programme unter Windows (und native Programme auf anderen
   Plattformen mit vorhandenem C-Compiler)
@@ -108,7 +111,10 @@ fn main() -> int {
   `exists`, `is_file`, `is_dir`, `file_size`, `create_dir_all`,
   `remove_file`, `remove_dir`, `copy_file`, `rename`, `current_dir`,
   `join_path`, `read_dir` – alle Fehler über `Result`, Unicode-Pfade
-  unter Windows (UTF-16-Wide-APIs)
+  unter Windows (UTF-16-Wide-APIs); zusätzlich **`read_text_limited`**
+  (Größenlimit vor dem Lesen, UTF-8-Validierung) und **`read_bytes`**
+  (binäre Inhalte als verwaltetes `std.fs::Bytes` mit `bytes_len`,
+  eingebettete NUL-Bytes bleiben erhalten, Obergrenze 8 MiB)
 - **`std.process`** (`use std::process;`): `run`/`run_in` starten
   Programme ohne Shell mit getrennten Argumenten und liefern
   `ProcessOutput { exit_code, stdout, stderr }` (Startfehler ≠
@@ -171,9 +177,25 @@ fn main() -> int {
   `application/json` und optionalen Zusatz-Headern). Keine Callbacks:
   Anwendungen verzweigen über den Routennamen; Routing ist keine
   Autorisierung
+- **`web::static_file`**: statische Dateien aus einem Wurzelordner
+  ausliefern (nur `GET`/`HEAD`, sonst `405` mit `Allow: GET, HEAD`) —
+  Pfad wird genau einmal prozentdekodiert, kodierte Trenner, `..`,
+  absolute Pfade und Laufwerks-/UNC-Präfixe werden abgelehnt (`400`);
+  der geöffnete Dateipfad wird nach Auflösung von Symlinks/Junctions
+  gegen den Wurzelordner geprüft, Ausbrüche ergeben `400`; fehlende
+  Dateien/Ordner `404`, andere Lesefehler und Dateien über 8 MiB `500`;
+  `Content-Type` aus der Endung (unbekannt:
+  `application/octet-stream`) plus `X-Content-Type-Options: nosniff`,
+  Antworten vollständig gepuffert (kein Streaming, keine Range-Requests,
+  kein Index-Fallback)
 - **`http::write_response_full`**: Antworten mit validierten
   Zusatz-Headern (Framing-Header bleiben unter Kontrolle der Bibliothek,
   CR/LF-Injection ausgeschlossen); `204`/`304` liefern nie einen Body
+- **`http::write_response_bytes`/`write_response_bytes_head`**: binäre
+  Antworten über `std.fs::Bytes` mit exakter Byte-Länge (NUL-Bytes
+  bleiben erhalten); die `_head`-Variante sendet dieselben Kopfzeilen
+  inklusive echtem `Content-Length` ohne Body; `204`/`304` liefern nie
+  einen Body
 - **`std.html`** (`use std::html;`): `escape` (maskiert `&`, `<`, `>`,
   `"`, `'`), eine kleine Template-Engine (`template` parst einmal,
   `render` rendert beliebig oft) mit `{{pfad}}`-Platzhaltern
@@ -188,7 +210,13 @@ fn main() -> int {
   `render_page_with` senden mit `text/html; charset=utf-8` über die
   bestehende HTTP-Response-Infrastruktur. Escaping schützt HTML-Text
   und quotierte Attribute — **nicht** JavaScript-, CSS- oder
-  URL-Kontexte; Raw-HTML gibt es nicht
+  URL-Kontexte; Raw-HTML gibt es nicht. **`template_file`** lädt eine
+  Vorlage aus einer Datei (max. 64 KiB, gültiges UTF-8, derselbe Parser
+  und dieselben Limits wie `template`); **`template_file_from`** löst
+  einen relativen Pfad gegen einen Wurzelordner auf und prüft nach dem
+  Öffnen, dass die Datei (inklusive aufgelöster Symlinks/Junctions)
+  innerhalb des Ordners liegt (`..`, absolute Pfade und Ausbrüche werden
+  abgelehnt)
 - **Module und Imports** (`use`), Untermodule, `pub`-Sichtbarkeit,
   **`pub use`-Re-Exports**, zyklische Importe, Deduplizierung,
   qualifizierte Pfade
@@ -283,7 +311,7 @@ Bloom/
 ## Tests
 
 ```bash
-cargo test        # Unit-Tests + Integrationstests (477 Tests)
+cargo test        # Unit-Tests + Integrationstests (486 Tests)
 cargo clippy --all-targets
 cargo fmt
 ```

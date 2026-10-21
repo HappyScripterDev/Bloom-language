@@ -3224,7 +3224,6 @@ fn run_web_examples() {
     }
 }
 
-
 #[test]
 fn web_rest_server_natively() {
     use std::io::{BufRead, BufReader, Read, Write};
@@ -5696,7 +5695,7 @@ fn fs_read_bytes_and_limited_natively() {
     write_bytes(&blob, &[0u8, 1, 255, 0, 65, 10, 0]);
     write_bytes(&empty, &[]);
     write_bytes(&invalid, &[0xFFu8, 0xFE, 0x41]);
-    write_bytes(&big, &vec![b'x'; 100]);
+    write_bytes(&big, &[b'x'; 100]);
     write_file(&ok, "abcdef");
     let src = r#"use std::fs;
 
@@ -5739,13 +5738,20 @@ fn main() -> int {
     };
     return 0;
 }
-"#.replace("@BLOB@", &blob.to_string_lossy().replace('\\', "\\\\"))
-                .replace("@EMPTY@", &empty.to_string_lossy().replace('\\', "\\\\"))
-                .replace("@MISSING@", &missing.to_string_lossy().replace('\\', "\\\\"))
-                .replace("@DIR@", &dir.to_string_lossy().replace('\\', "\\\\"))
-                .replace("@INVALID@", &invalid.to_string_lossy().replace('\\', "\\\\"))
-                .replace("@BIG@", &big.to_string_lossy().replace('\\', "\\\\"))
-                .replace("@OK@", &ok.to_string_lossy().replace('\\', "\\\\"));
+"#
+    .replace("@BLOB@", &blob.to_string_lossy().replace('\\', "\\\\"))
+    .replace("@EMPTY@", &empty.to_string_lossy().replace('\\', "\\\\"))
+    .replace(
+        "@MISSING@",
+        &missing.to_string_lossy().replace('\\', "\\\\"),
+    )
+    .replace("@DIR@", &dir.to_string_lossy().replace('\\', "\\\\"))
+    .replace(
+        "@INVALID@",
+        &invalid.to_string_lossy().replace('\\', "\\\\"),
+    )
+    .replace("@BIG@", &big.to_string_lossy().replace('\\', "\\\\"))
+    .replace("@OK@", &ok.to_string_lossy().replace('\\', "\\\\"));
     let file = dir.join("main.blm");
     write_file(&file, &src);
     let out = run_bloom_env(
@@ -5829,13 +5835,50 @@ fn main() -> int {
     render_from("@ROOT@", "../outside.txt", "name", "Ada");
     return 0;
 }
-"#.replace("@PAGE@", &root.join("page.html").to_string_lossy().replace('\\', "\\\\"))
-                .replace("@EMPTY@", &root.join("empty.html").to_string_lossy().replace('\\', "\\\\"))
-                .replace("@SYNTAX@", &root.join("syntax.html").to_string_lossy().replace('\\', "\\\\"))
-                .replace("@BIG@", &root.join("big.html").to_string_lossy().replace('\\', "\\\\"))
-                .replace("@INVALID@", &root.join("invalid.html").to_string_lossy().replace('\\', "\\\\"))
-                .replace("@MISSING@", &root.join("missing.html").to_string_lossy().replace('\\', "\\\\"))
-                .replace("@ROOT@", &root.to_string_lossy().replace('\\', "\\\\"));
+"#
+    .replace(
+        "@PAGE@",
+        &root
+            .join("page.html")
+            .to_string_lossy()
+            .replace('\\', "\\\\"),
+    )
+    .replace(
+        "@EMPTY@",
+        &root
+            .join("empty.html")
+            .to_string_lossy()
+            .replace('\\', "\\\\"),
+    )
+    .replace(
+        "@SYNTAX@",
+        &root
+            .join("syntax.html")
+            .to_string_lossy()
+            .replace('\\', "\\\\"),
+    )
+    .replace(
+        "@BIG@",
+        &root
+            .join("big.html")
+            .to_string_lossy()
+            .replace('\\', "\\\\"),
+    )
+    .replace(
+        "@INVALID@",
+        &root
+            .join("invalid.html")
+            .to_string_lossy()
+            .replace('\\', "\\\\"),
+    )
+    .replace(
+        "@MISSING@",
+        &root
+            .join("missing.html")
+            .to_string_lossy()
+            .replace('\\', "\\\\"),
+    )
+    .replace("@ROOT@", &root.to_string_lossy().replace('\\', "\\\\"));
     let file = dir.join("main.blm");
     write_file(&file, &src);
     let out = run_bloom_env(
@@ -5851,7 +5894,10 @@ fn main() -> int {
     assert!(stdout.contains("OUT:<h1>Willkommen</h1>\n"), "{stdout}");
     assert!(stdout.contains("OUT:<h1>Nochmal</h1>\n"), "{stdout}");
     assert!(stdout.contains("OUT:\n"), "{stdout}");
-    assert!(stdout.contains("ERR: directive requires a path"), "{stdout}");
+    assert!(
+        stdout.contains("ERR: directive requires a path"),
+        "{stdout}"
+    );
     assert!(stdout.contains("file exceeds 65536 bytes"), "{stdout}");
     assert!(stdout.contains("file is not valid UTF-8"), "{stdout}");
     assert!(stdout.contains("file not found"), "{stdout}");
@@ -5875,7 +5921,11 @@ fn html_template_file_confinement_natively() {
     write_file(&dir.join("outside/secret.html"), "SECRET");
     let junction = root.join("jump");
     let junction_ok = make_junction(&junction, &dir.join("outside"));
-    let drive = if cfg!(windows) { "C:\\Windows\\win.ini" } else { "/etc/hosts" };
+    let drive = if cfg!(windows) {
+        "C:\\Windows\\win.ini"
+    } else {
+        "/etc/hosts"
+    };
     let src = r#"use std::html;
 
 fn attempt(name: string, root: string, rel: string) -> void {
@@ -5895,8 +5945,9 @@ fn main() -> int {
     attempt("dot", "@ROOT@", "./tpl.html");
     return 0;
 }
-"#.replace("@ROOT@", &root.to_string_lossy().replace('\\', "\\\\"))
-                .replace("@ABS@", &drive.replace('\\', "\\\\"));
+"#
+    .replace("@ROOT@", &root.to_string_lossy().replace('\\', "\\\\"))
+    .replace("@ABS@", &drive.replace('\\', "\\\\"));
     let file = dir.join("main.blm");
     write_file(&file, &src);
     let out = run_bloom_env(
@@ -6063,8 +6114,9 @@ fn main() -> int {
     net::tcp_close(listener);
     return 0;
 }
-"#.replace("@BIN@", &bin.to_string_lossy().replace('\\', "\\\\"))
-                .replace("@EMPTY@", &empty.to_string_lossy().replace('\\', "\\\\"));
+"#
+    .replace("@BIN@", &bin.to_string_lossy().replace('\\', "\\\\"))
+    .replace("@EMPTY@", &empty.to_string_lossy().replace('\\', "\\\\"));
     let file = dir.join("main.blm");
     write_file(&file, &src);
     let exe = dir.join(if cfg!(windows) { "bytes.exe" } else { "bytes" });
@@ -6113,7 +6165,10 @@ fn main() -> int {
     let r1 = request("/bin");
     let (head1, body1) = split_response(&r1);
     assert!(head1.starts_with("HTTP/1.1 200 OK\r\n"), "{head1}");
-    assert!(head1.contains("Content-Type: application/octet-stream"), "{head1}");
+    assert!(
+        head1.contains("Content-Type: application/octet-stream"),
+        "{head1}"
+    );
     assert!(head1.contains("X-Test: 1\r\n"), "{head1}");
     assert!(head1.contains("Content-Length: 7\r\n"), "{head1}");
     assert_eq!(body1, vec![0u8, 1, 255, 0, 65, 0, 66], "{body1:?}");
@@ -6125,7 +6180,10 @@ fn main() -> int {
 
     let r3 = request("/204");
     let (head3, body3) = split_response(&r3);
-    assert!(head3.starts_with("HTTP/1.1 304 Not Modified\r\n"), "{head3}");
+    assert!(
+        head3.starts_with("HTTP/1.1 304 Not Modified\r\n"),
+        "{head3}"
+    );
     assert!(head3.contains("Content-Length: 0\r\n"), "{head3}");
     assert!(body3.is_empty(), "{body3:?}");
 
@@ -6135,7 +6193,10 @@ fn main() -> int {
     assert!(body4.is_empty(), "{body4:?}");
 
     let r5 = request("/bad");
-    assert!(r5.is_empty(), "bad header must be rejected before writing: {r5:?}");
+    assert!(
+        r5.is_empty(),
+        "bad header must be rejected before writing: {r5:?}"
+    );
 
     let status = child.wait().expect("wait");
     let mut rest = String::new();
@@ -6262,7 +6323,11 @@ fn main() -> int {
     .replace("@SITE@", &site.to_string_lossy().replace('\\', "\\\\"));
     let file = dir.join("main.blm");
     write_file(&file, &src);
-    let exe = dir.join(if cfg!(windows) { "static.exe" } else { "static" });
+    let exe = dir.join(if cfg!(windows) {
+        "static.exe"
+    } else {
+        "static"
+    });
     let build = run_bloom(&[
         "build",
         file.to_string_lossy().as_ref(),
@@ -6299,7 +6364,10 @@ fn main() -> int {
     let r1 = request("GET", "/index.txt");
     let (head1, body1) = split_http_response(&r1);
     assert!(head1.starts_with("HTTP/1.1 200 OK\r\n"), "{head1}");
-    assert!(head1.contains("Content-Type: text/plain; charset=utf-8"), "{head1}");
+    assert!(
+        head1.contains("Content-Type: text/plain; charset=utf-8"),
+        "{head1}"
+    );
     assert!(head1.contains("X-Content-Type-Options: nosniff"), "{head1}");
     assert!(head1.contains("Content-Length: 12\r\n"), "{head1}");
     assert_eq!(body1, b"hello static".to_vec());
@@ -6307,7 +6375,10 @@ fn main() -> int {
     let r2 = request("GET", "/bin.dat");
     let (head2, body2) = split_http_response(&r2);
     assert!(head2.starts_with("HTTP/1.1 200 OK\r\n"), "{head2}");
-    assert!(head2.contains("Content-Type: application/octet-stream"), "{head2}");
+    assert!(
+        head2.contains("Content-Type: application/octet-stream"),
+        "{head2}"
+    );
     assert!(head2.contains("Content-Length: 7\r\n"), "{head2}");
     assert_eq!(body2, vec![0u8, 1, 255, 0, 65, 10, 0], "{body2:?}");
 
@@ -6325,7 +6396,10 @@ fn main() -> int {
 
     let r5 = request("POST", "/index.txt");
     let (head5, body5) = split_http_response(&r5);
-    assert!(head5.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"), "{head5}");
+    assert!(
+        head5.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"),
+        "{head5}"
+    );
     assert!(head5.contains("Allow: GET, HEAD\r\n"), "{head5}");
     assert_eq!(body5, b"method not allowed".to_vec());
 
@@ -6335,17 +6409,26 @@ fn main() -> int {
 
     let r7 = request("GET", "/sub/app.js");
     let (head7, body7) = split_http_response(&r7);
-    assert!(head7.contains("Content-Type: text/javascript; charset=utf-8"), "{head7}");
+    assert!(
+        head7.contains("Content-Type: text/javascript; charset=utf-8"),
+        "{head7}"
+    );
     assert_eq!(body7, b"console.log('hi');".to_vec());
 
     let r8 = request("GET", "/sub/page.html");
     let (head8, body8) = split_http_response(&r8);
-    assert!(head8.contains("Content-Type: text/html; charset=utf-8"), "{head8}");
+    assert!(
+        head8.contains("Content-Type: text/html; charset=utf-8"),
+        "{head8}"
+    );
     assert_eq!(body8, b"<p>{{name}}</p>".to_vec());
 
     let r9 = request("GET", "/style.css");
     let (head9, _) = split_http_response(&r9);
-    assert!(head9.contains("Content-Type: text/css; charset=utf-8"), "{head9}");
+    assert!(
+        head9.contains("Content-Type: text/css; charset=utf-8"),
+        "{head9}"
+    );
 
     let r10 = request("GET", "/../outside/secret.txt");
     let (head10, _) = split_http_response(&r10);
@@ -6435,10 +6518,18 @@ fn spawn_example_server(
     dir: &PathBuf,
     name: &str,
     exe_name: &str,
-) -> Option<(std::process::Child, u16, std::io::BufReader<std::process::ChildStdout>)> {
+) -> Option<(
+    std::process::Child,
+    u16,
+    std::io::BufReader<std::process::ChildStdout>,
+)> {
     use std::io::{BufRead, BufReader};
 
-    let exe = dir.join(if cfg!(windows) { exe_name.to_string() + ".exe" } else { exe_name.to_string() });
+    let exe = dir.join(if cfg!(windows) {
+        exe_name.to_string() + ".exe"
+    } else {
+        exe_name.to_string()
+    });
     let build = run_bloom(&[
         "build",
         &example(name),
@@ -6459,8 +6550,15 @@ fn spawn_example_server(
         .expect("spawn server");
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
     let mut port_line = String::new();
-    reader.read_line(&mut port_line).expect("port");
-    let port: u16 = port_line.trim().parse().expect("port number");
+    let port: u16 = loop {
+        port_line.clear();
+        let n = reader.read_line(&mut port_line).expect("port");
+        assert!(n > 0, "server exited before printing its port");
+        let text = port_line.trim();
+        if let Ok(p) = text.parse::<u16>() {
+            break p;
+        }
+    };
     Some((child, port, reader))
 }
 
@@ -6469,10 +6567,11 @@ fn web_static_files_example_natively() {
     use std::io::{Read, Write};
 
     let dir = temp_dir("web-static-example");
-    let (mut child, port, mut reader) = match spawn_example_server(&dir, "web_static_files.blm", "web_static") {
-        Some(v) => v,
-        None => return,
-    };
+    let (mut child, port, mut reader) =
+        match spawn_example_server(&dir, "web_static_files.blm", "web_static") {
+            Some(v) => v,
+            None => return,
+        };
     let request = |method: &str, target: &str| -> Vec<u8> {
         let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
         let raw = format!(
@@ -6500,17 +6599,53 @@ fn web_static_files_example_natively() {
         let (head, _) = split_http_response(&resp);
         statuses.push((method, target, head));
     }
-    assert!(statuses[0].2.starts_with("HTTP/1.1 200 "), "{:?}", statuses[0].2);
+    assert!(
+        statuses[0].2.starts_with("HTTP/1.1 200 "),
+        "{:?}",
+        statuses[0].2
+    );
     assert!(statuses[1].2.contains("text/css"), "{:?}", statuses[1].2);
-    assert!(statuses[2].2.contains("text/javascript"), "{:?}", statuses[2].2);
-    assert!(statuses[3].2.contains("application/json"), "{:?}", statuses[3].2);
+    assert!(
+        statuses[2].2.contains("text/javascript"),
+        "{:?}",
+        statuses[2].2
+    );
+    assert!(
+        statuses[3].2.contains("application/json"),
+        "{:?}",
+        statuses[3].2
+    );
     assert!(statuses[4].2.contains("text/plain"), "{:?}", statuses[4].2);
-    assert!(statuses[5].2.starts_with("HTTP/1.1 200 "), "{:?}", statuses[5].2);
-    assert!(statuses[6].2.starts_with("HTTP/1.1 404 "), "{:?}", statuses[6].2);
-    assert!(statuses[7].2.starts_with("HTTP/1.1 405 "), "{:?}", statuses[7].2);
-    assert!(statuses[7].2.contains("Allow: GET, HEAD"), "{:?}", statuses[7].2);
-    assert!(statuses[8].2.starts_with("HTTP/1.1 400 "), "{:?}", statuses[8].2);
-    assert!(statuses[9].2.starts_with("HTTP/1.1 404 "), "{:?}", statuses[9].2);
+    assert!(
+        statuses[5].2.starts_with("HTTP/1.1 200 "),
+        "{:?}",
+        statuses[5].2
+    );
+    assert!(
+        statuses[6].2.starts_with("HTTP/1.1 404 "),
+        "{:?}",
+        statuses[6].2
+    );
+    assert!(
+        statuses[7].2.starts_with("HTTP/1.1 405 "),
+        "{:?}",
+        statuses[7].2
+    );
+    assert!(
+        statuses[7].2.contains("Allow: GET, HEAD"),
+        "{:?}",
+        statuses[7].2
+    );
+    assert!(
+        statuses[8].2.starts_with("HTTP/1.1 400 "),
+        "{:?}",
+        statuses[8].2
+    );
+    assert!(
+        statuses[9].2.starts_with("HTTP/1.1 404 "),
+        "{:?}",
+        statuses[9].2
+    );
 
     let status = child.wait().expect("wait");
     let mut rest = String::new();
@@ -6535,10 +6670,11 @@ fn web_html_site_example_natively() {
     use std::io::{Read, Write};
 
     let dir = temp_dir("web-html-site");
-    let (mut child, port, mut reader) = match spawn_example_server(&dir, "web_html_site.blm", "web_site") {
-        Some(v) => v,
-        None => return,
-    };
+    let (mut child, port, mut reader) =
+        match spawn_example_server(&dir, "web_html_site.blm", "web_site") {
+            Some(v) => v,
+            None => return,
+        };
     let request = |method: &str, target: &str| -> Vec<u8> {
         let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
         let raw = format!(
@@ -6552,7 +6688,10 @@ fn web_html_site_example_natively() {
     let r1 = request("GET", "/");
     let (head1, body1) = split_http_response(&r1);
     assert!(head1.starts_with("HTTP/1.1 200 OK\r\n"), "{head1}");
-    assert!(head1.contains("Content-Type: text/html; charset=utf-8"), "{head1}");
+    assert!(
+        head1.contains("Content-Type: text/html; charset=utf-8"),
+        "{head1}"
+    );
     let page = String::from_utf8_lossy(&body1);
     assert!(page.contains("<h1>Bloom-Website</h1>"), "{page}");
     assert!(page.contains("Vorlage aus Datei"), "{page}");
@@ -6622,7 +6761,11 @@ fn web_static_errors_example_natively() {
     use std::io::{BufRead, BufReader, Read, Write};
 
     let dir = temp_dir("web-static-errors");
-    let exe = dir.join(if cfg!(windows) { "static_errors.exe" } else { "static_errors" });
+    let exe = dir.join(if cfg!(windows) {
+        "static_errors.exe"
+    } else {
+        "static_errors"
+    });
     let build = run_bloom(&[
         "build",
         &example("web_static_errors.blm"),
@@ -6643,8 +6786,15 @@ fn web_static_errors_example_natively() {
         .expect("spawn server");
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
     let mut port_line = String::new();
-    reader.read_line(&mut port_line).expect("port");
-    let port: u16 = port_line.trim().parse().expect("port number");
+    let port: u16 = loop {
+        port_line.clear();
+        let n = reader.read_line(&mut port_line).expect("port");
+        assert!(n > 0, "server exited before printing its port");
+        let text = port_line.trim();
+        if let Ok(p) = text.parse::<u16>() {
+            break p;
+        }
+    };
     let request = |method: &str, target: &str| -> Vec<u8> {
         let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
         let raw = format!(
@@ -6696,6 +6846,9 @@ fn web_static_errors_example_natively() {
     assert!(log.contains("Status 404: GET /missing.txt"), "{log}");
     assert!(stderr.contains("live allocations: 0"), "{stderr}");
     assert!(stderr.contains("live sockets: 0"), "{stderr}");
-    assert!(!dir.join("bloom_static_errors_demo").exists(), "cleanup failed");
+    assert!(
+        !dir.join("bloom_static_errors_demo").exists(),
+        "cleanup failed"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

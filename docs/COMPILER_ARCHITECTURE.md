@@ -66,7 +66,9 @@ dafür:
   `stderr`) und den Struct `std::json::JsonValue` (Feld `id` vom
   internen Typ `Type::Json`) und die Structs `std::web::Router` (Feld `id`
 vom internen Typ `Type::Web`) sowie `std::web::Match` (Felder `status`,
-`name`, `allow` und `params: std::json::JsonValue`).
+`name`, `allow` und `params: std::json::JsonValue`), `std::fs::Bytes`
+(Feld `id` vom internen Typ `Type::Bytes`) und `std::html::Template`
+(Feld `id` vom internen Typ `Type::Html`).
 
 Codegen überspringt Prototypen für `std::*`-Funktionen, emittiert die
 C-Implementierung nur für tatsächlich geladene Module (nach den
@@ -213,8 +215,28 @@ Renderfehler den Pfad. `<script>`/`<style>` werden beim Parsen
 abgelehnt. `render_page(_with)` rendert vollständig vor dem Schreiben
 und nutzt `bloom_http_write_response_full` mit
 `text/html; charset=utf-8`. Emission nach `std::json`/`std::http`
-(html zuletzt); die Signaturregistrierung lädt `json`, `http`, `net`
-und `tls`.
+(html zuletzt); die Signaturregistrierung lädt `json`, `http`, `net`,
+`tls` und `fs`. `template_file`/`template_file_from` lesen über die
+`std::fs`-Helfer (Größenlimit vor dem Lesen, UTF-8-Prüfung) und nutzen
+denselben Parser; `template_file_from` öffnet mit Wurzelordner-Schutz
+(kanonischer Pfadvergleich nach dem Öffnen).
+
+## Dateien (`std::fs::Bytes`, statische Inhalte)
+
+`bloom_fs.c` enthält neben den Text-/Verzeichnisfunktionen einen
+refcounteten Byte-Puffer (`bloom_fs_bytes`, `Type::Bytes`, Bauart wie
+`Type::Json`): `read_bytes` liest exakt die Dateigröße (max. 8 MiB,
+NUL-Bytes bleiben erhalten), `bytes_len` liest nur das Feld.
+`bloom_fs_open_confined` öffnet eine Datei und prüft **auf dem
+geöffneten Handle** (Windows `GetFinalPathNameByHandleW` plus
+`CompareStringOrdinal` gegen den Wurzelordner-Handle; POSIX
+`realpath` plus Geräte-/Inode-Vergleich), ob der aufgelöste Pfad im
+Wurzelordner liegt — Symlinks/Junctions werden dadurch mitgeprüft.
+`bloom_web_static_file` verbindet das mit `bloom_http_write_response_bytes`
+(exakte Byte-Länge, `_head`-Variante für `HEAD`); die MIME-Tabelle ist
+fest, unbekannte Endungen liefern `application/octet-stream`. Emission
+von `std::fs` erfolgt vor `std::http`/`std::web`/`std::html`, die diese
+Helfer und den `Bytes`-Struct in ihren Signaturen verwenden.
 
 ## Formatter (`src/fmt.rs`)
 

@@ -1161,11 +1161,12 @@ bloom_enum_Result_i64_str bloom_web_static_file(
     err.rc = 0;
     err.data = NULL;
     err.len = 0;
-    if (bloom_web_split_path(request.f_target.data, qmark, &segs, &err) != 0
-        || segs.count == 0) {
+    bool split_ok = bloom_web_split_path(request.f_target.data, qmark, &segs, &err) == 0;
+    size_t seg_count = segs.count;
+    if (!split_ok || seg_count == 0) {
         bloom_str_drop(&err);
         bloom_web_list_free(&segs);
-        if (segs.count == 0 && err.data == NULL) {
+        if (split_ok) {
             bloom_str msg = bloom_str_from_bytes("not found", 9);
             return bloom_web_static_error(connection, 404, msg, is_head);
         }
@@ -1202,6 +1203,7 @@ bloom_enum_Result_i64_str bloom_web_static_file(
     join_err.len = 0;
     if (!bloom_fs_join_inside_root(root, rel_path, &joined, &joined_len, &join_err)) {
         bloom_str_drop(&rel_path);
+        bloom_str_drop(&join_err);
         bloom_str msg = bloom_str_from_bytes("bad request", 11);
         return bloom_web_static_error(connection, 400, msg, is_head);
     }

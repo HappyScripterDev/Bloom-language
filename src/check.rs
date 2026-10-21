@@ -1178,7 +1178,8 @@ impl Checker {
                 }
                 Some(crate::modules::BuiltinModule::Html) => {
                     self.register_html_functions(&m.name);
-                }                Some(crate::modules::BuiltinModule::Win32) => {
+                }
+                Some(crate::modules::BuiltinModule::Win32) => {
                     if cfg!(windows) {
                         self.register_win32_functions(&m.name);
                     } else {
@@ -1358,16 +1359,18 @@ impl Checker {
         }
         let span = Span::point(1, 1);
         let bytes_canonical = format!("{}::Bytes", module);
-        self.structs.entry(bytes_canonical).or_insert_with(|| StructInfo {
-            params: Vec::new(),
-            fields: vec![StructField {
-                name: "id".to_string(),
-                ty: Type::Bytes,
-            }],
-            span,
-            module: module.to_string(),
-            is_pub: true,
-        });
+        self.structs
+            .entry(bytes_canonical)
+            .or_insert_with(|| StructInfo {
+                params: Vec::new(),
+                fields: vec![StructField {
+                    name: "id".to_string(),
+                    ty: Type::Bytes,
+                }],
+                span,
+                module: module.to_string(),
+                is_pub: true,
+            });
     }
 
     fn register_path_functions(&mut self, module: &str) {
@@ -2223,13 +2226,7 @@ impl Checker {
             (
                 "write_response_bytes_head",
                 "bloom_http_write_response_bytes_head",
-                vec![
-                    Type::Int,
-                    Type::Int,
-                    Type::String,
-                    Type::String,
-                    bytes_ty,
-                ],
+                vec![Type::Int, Type::Int, Type::String, Type::String, bytes_ty],
                 str_err(Type::Bool),
             ),
         ];

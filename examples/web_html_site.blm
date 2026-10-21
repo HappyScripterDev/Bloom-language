@@ -32,8 +32,7 @@ fn setup(dir: string) -> void {
         fs::join_path(dir, "templates/page.html"),
         "<!doctype html><html><head><title>{{title}}</title>" +
         "<link rel=\"stylesheet\" href=\"/style.css\"></head>" +
-        "<body><h1>{{title}}</h1><p>{{message}}</p>" +
-        "<script src=\"/app.js\"></script></body></html>"
+        "<body><h1>{{title}}</h1><p>{{message}}</p></body></html>"
     );
     write_demo_file(fs::join_path(dir, "style.css"), "h1 { color: #245; }");
     write_demo_file(fs::join_path(dir, "app.js"), "console.log('seite geladen');");

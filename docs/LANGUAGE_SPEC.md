@@ -1,4 +1,4 @@
-# Bloom Sprachspezifikation (Version 0.14.0)
+# Bloom Sprachspezifikation (Version 0.15.0)
 
 Diese Spezifikation beschreibt exakt die Sprache, die der in diesem Repository
 enthaltene Compiler implementiert. Funktionen, die hier nicht stehen, sind
@@ -896,6 +896,19 @@ not found`). Kein Dateisystemfehler wird stillschweigend zu `false`.
 | `current_dir()` | `() -> Result<string, string>` | Aktuelles Arbeitsverzeichnis |
 | `join_path(base, child)` | `string, string -> string` | Pfad verbinden (`\` unter Windows, `/` unter POSIX); absolute `child`-Pfade werden unverändert zurückgegeben; erzeugt keine Datei |
 | `read_dir(path)` | `string -> Result<[string], string>` | Eintragsnamen (ohne `.`/`..`), byteweise sortiert |
+| `read_text_limited(path, limit)` | `string, int -> Result<string, string>` | Wie `read_text`, aber mit Größenlimit: die Dateigröße wird **vor** dem Lesen geprüft (`file exceeds N bytes`); `limit <= 0` lehnt jede nicht-leere Datei ab |
+| `read_bytes(path)` | `string -> Result<Bytes, string>` | Binärer Inhalt als verwaltetes `Bytes`-Handle (max. 8 MiB); NUL-Bytes bleiben erhalten; Verzeichnisse sind ein Fehler |
+| `bytes_len(bytes)` | `Bytes -> int` | Länge in Bytes |
+
+```bloom
+pub struct Bytes { id }   // undurchsichtiges, verwaltetes Handle
+```
+
+- **`Bytes`** ist ein referenzgezähltes Byte-Puffer-Handle (`std.fs::Bytes`),
+  das wie `JsonValue`/`Template` automatisch verwaltet wird. Der Inhalt
+  ist **kein** gültiger UTF-8-Text garantiert; `read_text*` ist für Text,
+  `read_bytes` für binäre Daten gedacht (z. B. für
+  `http::write_response_bytes`).
 
 - **Plattform:** Unter Windows werden alle Pfade von UTF-8 nach UTF-16
   konvertiert und an die Wide-Char-APIs gegeben — Nicht-ASCII-Dateinamen
@@ -1057,6 +1070,8 @@ println(str(r.status) + " " + r.body);
 | `read_request(connection)` | `int -> Result<HttpRequest, string>` |
 | `write_response(connection, status, content_type, body)` | `int, int, string, string -> Result<bool, string>` |
 | `write_response_full(connection, status, content_type, headers, body)` | `int, int, string, string, string -> Result<bool, string>` |
+| `write_response_bytes(connection, status, content_type, headers, bytes)` | `int, int, string, string, Bytes -> Result<bool, string>` |
+| `write_response_bytes_head(connection, status, content_type, headers, bytes)` | `int, int, string, string, Bytes -> Result<bool, string>` |
 | `header_get(headers, name)` | `string, string -> Option<string>` |
 
 ```bloom
@@ -1089,6 +1104,14 @@ pub struct HttpResponse { status: int, reason, version, headers, body }
   die Verbindung danach mit `tcp_close`. Antworten werden immer mit
   `Content-Length` geschrieben (kein Chunked-Encoding auf der
   Server-Schreibseite).
+- **Binäre Antworten:** `write_response_bytes` schreibt den exakten
+  Byte-Inhalt eines `std.fs::Bytes`-Puffers (eingebettete NUL-Bytes
+  bleiben erhalten) mit `Content-Length` = Byte-Länge;
+  `write_response_bytes_head` sendet dieselben Kopfzeilen, aber keinen
+  Body (für `HEAD`). `204`/`304` erhalten unabhängig vom Puffer einen
+  `Content-Length: 0` und keinen Body. `content_type` und Zusatz-Header
+  werden wie bei `write_response_full` validiert (CR/LF werden
+  abgelehnt, bevor irgendetwas geschrieben wird).
 - **Zusatz-Header:** `write_response_full` nimmt einen rohen Headerblock
   (`Name: value`-Zeilen) entgegen, validiert ihn (Zeilenlimits,
   Token-Namen, keine CR/LF in Werten, höchstens 16384 Bytes) und emittiert
@@ -1330,6 +1353,7 @@ if m.status == 200 {
 | `json_body_request(request)` | `HttpRequest -> Result<JsonValue, string>` |
 | `json_response(connection, status, value)` | `int, int, JsonValue -> Result<bool, string>` |
 | `json_response_with(connection, status, value, headers)` | `int, int, JsonValue, string -> Result<bool, string>` |
+| `static_file(connection, root, request)` | `int, string, HttpRequest -> Result<int, string>` |
 
 ```bloom
 pub struct Router { id }   // undurchsichtiges, verwaltetes Handle
@@ -1386,6 +1410,26 @@ pub struct Match  { status: int, name, allow, params }  // params: JsonValue
   geben keine Speicherinterna preis. `Router` ist ein verwalteter
   Bloom-Wert (Referenzzählung, kein manuelles Freigeben); `Match.params`
   ist ein mitverwalteter `json::JsonValue`.
+- **Statische Dateien:** `static_file(connection, root, request)`
+  beantwortet `GET` und `HEAD` direkt (andere Methoden: `405` mit
+  `Allow: GET, HEAD`). Der Anfragepfad wird zuerst am `?` geteilt, dann
+  prozentdekodiert (jeweils genau einmal); ungültige Escapes/UTF-8,
+  dekodierte Trenner (`/`, `\`), `..`-Segmente, absolute Pfade und
+  Laufwerks-/UNC-Präfixe ergeben `400`. Der Pfad wird gegen `root`
+  verbunden, geöffnet und **nach dem Öffnen** (inklusive aufgelöster
+  Symlinks/Junctions) mit dem kanonischen Wurzelpfad verglichen — ein
+  Ausbruch ergibt `400`; `std::path`-Normalisierung allein ist keine
+  Sicherheitsgrenze. Fehlende Dateien und Ordner: `404`; Dateien über
+  8 MiB (`BLOOM_FS_MAX_BYTES`) und andere Öffnungs-/Lesefehler: `500`.
+  Der `Content-Type` kommt ausschließlich aus der Endung (html/htm, css,
+  js, json, svg, txt, png, jpg/jpeg, gif, webp, ico, woff, woff2;
+  unbekannt: `application/octet-stream`) und wird immer zusammen mit
+  `X-Content-Type-Options: nosniff` gesendet. `HEAD` sendet dieselben
+  Kopfzeilen inklusive echtem `Content-Length` ohne Body. Antworten
+  werden vollständig gepuffert (kein Streaming, keine Range-Requests,
+  kein ETag/Last-Modified, kein `index.html`-Fallback: ein leerer Pfad
+  ergibt `404`). Der Rückgabewert ist der gesendete Status; `Err`
+  bedeutet, dass die Antwort nicht geschrieben werden konnte.
 
 ### 13.13 Standardmodul `std::html` (Escaping und Templates)
 
@@ -1409,6 +1453,8 @@ html::render_page(conn, 200, t, data);                  // text/html; charset=ut
 | `render(template, data)` | `Template, JsonValue -> Result<string, string>` |
 | `render_page(connection, status, template, data)` | `int, int, Template, JsonValue -> Result<bool, string>` |
 | `render_page_with(connection, status, template, data, headers)` | `int, int, Template, JsonValue, string -> Result<bool, string>` |
+| `template_file(path)` | `string -> Result<Template, string>` |
+| `template_file_from(root, relative)` | `string, string -> Result<Template, string>` |
 
 ```bloom
 pub struct Template { id }   // undurchsichtiges, verwaltetes Handle
@@ -1458,6 +1504,18 @@ pub struct Template { id }   // undurchsichtiges, verwaltetes Handle
   validiert (CR/LF-Injection ausgeschlossen, Framing-Header gesperrt),
   `204`/`304` erhalten keinen Body. Routing, Authentifizierung und
   Sessions bleiben Aufgabe der Anwendung (`std::web`).
+- **Dateien:** `template_file(path)` liest die Vorlage über
+  `fs::read_text_limited` (Grenze `BLOOM_HTML_MAX_SOURCE` = 65536
+  Bytes; die Größe wird vor dem Lesen geprüft) und parst sie mit
+  demselben Parser wie `template`. `template_file_from(root,
+  relative)` validiert den relativen Pfad (`..`, absolute Pfade,
+  Laufwerks-/UNC-Präfixe und leere Segmente sind Fehler), öffnet die
+  Datei mit Wurzelordner-Schutz (kanonischer Vergleich nach dem
+  Öffnen, Symlinks/Junctions inklusive) und prüft UTF-8 vor dem
+  Parsen. Vorlagen werden **einmal** geladen; es gibt kein Neuladen
+  oder Beobachten von Dateien. Der Fehlertext beginnt mit
+  `template_file:` bzw. `template_file_from:` und nennt den Pfad und
+  den Grund.
 
 ## 14. Fehlerdiagnostik
 
@@ -1552,7 +1610,7 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
 | 5 | Datei-/E/A-Fehler |
 | 70 | Laufzeitfehler im Bloom-Programm |
 
-## 16. Ausdrücklich nicht unterstützt (Version 0.14.0)
+## 16. Ausdrücklich nicht unterstützt (Version 0.15.0)
 
 - Referenzempfänger (`&self`/`&mut self`), `var self` auf Enums
 - Klassen, Vererbung, Interfaces
@@ -1572,6 +1630,9 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
   Callback-Handler, Middleware, JSON-Streaming, Template-Includes,
   Raw-HTML-Platzhalter, ausführbare Template-Ausdrücke und
   kontextabhängige JavaScript/CSS/URL-Escapierung**
+- **Streaming/Range-Requests, ETag/Last-Modified, Verzeichnis-Indizes
+  und automatisches Neuladen von Dateien bei `web::static_file` bzw.
+  `html::template_file`**
 - **C-Structs by value, Funktionszeiger/Callbacks, variadische
   C-Funktionen, Pointer-Arithmetik, Dereferenzierung von `rawptr`**
 - **UDP, asynchrone/Thread-Netzwerkoperationen, Threads allgemein**

@@ -1,6 +1,6 @@
 # Bloom Speichermodell – Referenzzählung (Version 0.12.0)
 
-Stand: Version 0.14.0. Dieses Dokument beschreibt das **implementierte**
+Stand: Version 0.15.0. Dieses Dokument beschreibt das **implementierte**
 Referenzzählungsmodell, die Ownership-Regeln des generierten C-Codes, die
 Instrumentierung und die verbleibenden Grenzen.
 
@@ -201,6 +201,13 @@ Kopieren retained und am Scope-Ende freigegeben; ein fehlgeschlagenes
 Parsen liefert `Err` ohne Template, ein fehlgeschlagenes Rendern gibt
 den Ausgabepuffer frei. `render_page` rendert vollständig vor dem
 Schreiben, daher entstehen bei Renderfehlern keine halben Antworten.
+**Byte-Puffer (`std::fs::Bytes`, `Type::Bytes`) sind ebenfalls
+verwaltete Besitzwerte**: `fs::read_bytes` liefert ein refcountetes
+Handle auf die exakten Dateibytes (auch NUL-Bytes), Kopieren retained,
+das Scope-Ende gibt Puffer und Handle frei; `http::write_response_bytes`
+liest den Puffer nur und übernimmt keinen Besitz. Die Kontrolle über
+den Puffer liegt ausschließlich in der Laufzeit, daher kann Bloom-Code
+keine Länge fälschen.
 Alle Stdlib-Tests
 laufen unter `BLOOM_MEM_REPORT=1`. Getestet wird nativ mit MSVC
 (Windows). Valgrind/ASan sind auf dieser Toolchain nicht verfügbar und
