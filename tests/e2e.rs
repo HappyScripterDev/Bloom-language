@@ -8444,3 +8444,125 @@ fn main() -> int {
     assert!(stderr.contains("live sockets: 0"), "{stderr}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn web_multiple_set_cookie_headers_natively() {
+    use std::io::Read;
+
+    let dir = temp_dir("web-multi-set-cookie");
+    let src = r#"use std::web;
+use std::http;
+use std::net;
+
+fn options() -> web::CookieOptions {
+    return web::CookieOptions {
+        path: "/",
+        max_age: 0,
+        same_site: "Lax",
+        http_only: true,
+        insecure_http: true
+    };
+}
+
+fn collect() -> [string] {
+    var out: [string] = [];
+    match web::set_cookie("a", "1", options()) {
+        Result::Ok(line) => push(out, line),
+        Result::Err(e) => println("set-a-err: " + e)
+    };
+    match web::set_cookie("b", "2", options()) {
+        Result::Ok(line) => push(out, line),
+        Result::Err(e) => println("set-b-err: " + e)
+    };
+    return out;
+}
+
+fn respond(conn: int) -> void {
+    let lines = collect();
+    match web::cookie_headers(lines) {
+        Result::Ok(block) => write(conn, block),
+        Result::Err(e) => println("block-err: " + e)
+    };
+}
+
+fn write(conn: int, headers: string) -> void {
+    match http::write_response_full(conn, 200, "text/plain; charset=utf-8", headers, "ok") {
+        Result::Ok(_) => println("sent"),
+        Result::Err(e) => println("write-err: " + e)
+    };
+}
+
+fn ok_int(r: Result<int, string>) -> int {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => -1
+    };
+}
+
+fn main() -> int {
+    let listener = ok_int(net::tcp_listen("127.0.0.1", 0, 4));
+    if listener < 0 {
+        println("listen fehlgeschlagen");
+        return 1;
+    }
+    println(ok_int(net::local_port(listener)));
+    let conn = ok_int(net::tcp_accept(listener));
+    match http::read_request(conn) {
+        Result::Ok(request) => respond(conn),
+        Result::Err(e) => println("read-err: " + e)
+    };
+    net::tcp_close(conn);
+    net::tcp_close(listener);
+    return 0;
+}
+"#;
+    let file = dir.join("main.blm");
+    write_file(&file, src);
+    let exe = dir.join(if cfg!(windows) { "multi.exe" } else { "multi" });
+    let build = run_bloom(&[
+        "build",
+        file.to_string_lossy().as_ref(),
+        "-o",
+        exe.to_string_lossy().as_ref(),
+    ]);
+    if no_toolchain(&build) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(build.code, 0, "{}", build.combined());
+    let mut child = std::process::Command::new(&exe)
+        .env("BLOOM_MEM_REPORT", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn server");
+    let mut reader = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+    let port = read_port(&mut reader);
+
+    let response = raw_request(port, "GET", "/", None, b"");
+    let (head, body) = split_http_response(&response);
+    assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
+    assert_eq!(body, b"ok".to_vec());
+    let cookies = header_values(&head, "set-cookie");
+    assert_eq!(cookies.len(), 2, "two separate Set-Cookie headers: {head}");
+    assert!(cookies[0].starts_with("a=1"), "{cookies:?}");
+    assert!(cookies[1].starts_with("b=2"), "{cookies:?}");
+    assert!(head.contains("Set-Cookie: a=1"), "{head}");
+    assert!(head.contains("Set-Cookie: b=2"), "{head}");
+
+    let status = child.wait().expect("wait");
+    let mut rest = String::new();
+    reader.read_to_string(&mut rest).expect("rest");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("stderr read");
+    assert_eq!(status.code(), Some(0), "{rest}\n{stderr}");
+    assert!(rest.contains("sent"), "{rest}");
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    assert!(stderr.contains("live sockets: 0"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -456,7 +456,7 @@ Vertagt (weiterhin geplant):
   Path=/, Max-Age) und `session_cookie_insecure` für lokale Entwicklung
 - **Beispiele:** `web_cookies`, `web_session_basic`,
   `web_session_expiry`, `web_csrf_form`, `web_session_errors`
-- 501 Tests (321 Unit + 180 E2E), darunter Cookie-Parsing/Injection,
+- 502 Tests (321 Unit + 181 E2E), darunter Cookie-Parsing/Injection,
   Session-Lebenszyklus, Kapazität, Ablauf, Zufalls-Fehlerpfad,
   CSRF-Bindung und ein vollständiger HTTP-E2E mit Bloom-Client und
   Bloom-Server (Cookie setzen, erneut senden, Session ändern,
