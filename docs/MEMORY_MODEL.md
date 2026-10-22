@@ -211,7 +211,19 @@ Strings. Kopieren retained das Handle, das Scope-Ende gibt alle Paare
 und die Strings frei; ein Parsefehler gibt das halbfertige Formular
 samt bereits gelesener Einträge frei. Ein `Ok` von `form_get`,
 `form_first` oder `form_values` liefert geklonte Strings bzw. ein
-eigenes Array, nie eine Referenz in das Formular hinein.
+eigenes Array, nie eine Referenz in das Formular hinein. **Cookies
+(`Type::Cookies`), Session-Stores (`Type::SessionStore`) und Sessions
+(`Type::Session`) sind ebenfalls verwaltete Besitzwerte.** Ein
+`Cookies`-Handle hält seine Name/Wert-Strings. Ein Session-Store hält
+pro Session eine Referenz; ein `Session`-Handle hält eine weitere und
+schützt die Daten (ID, CSRF-Token, JSON-Objekt) auch dann, wenn die
+Session aus dem Store gelöscht oder durch Ablauf verworfen wurde.
+`session_data` liefert eine retained Referenz auf dasselbe JSON-Objekt:
+Mutationen sind für alle Handles sichtbar, und das Objekt lebt, solange
+irgendein Handle es hält. `session_destroy` und `session_expire` geben
+nur die Store-Referenz frei; Freigabe erfolgt erst, wenn der letzte
+Handle den Scope verlässt. `session_new` legt zwei Referenzen an (Store
+plus Rückgabewert), `session_load` erhöht den Zähler um eins.
 Alle Stdlib-Tests
 laufen unter `BLOOM_MEM_REPORT=1`. Getestet wird nativ mit MSVC
 (Windows). Valgrind/ASan sind auf dieser Toolchain nicht verfügbar und

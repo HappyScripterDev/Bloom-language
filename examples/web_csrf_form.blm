@@ -1,0 +1,180 @@
+// CSRF-Schutz für ein Formular: Der Token steckt in der Session, wird im
+// Formular mitgeschickt und beim Speichern serverseitig geprüft. Fehlt die
+// Session oder stimmt der Token nicht, gibt es 403.
+// Achtung: Set-Cookie ohne Secure, weil das Beispiel über HTTP läuft.
+use std::web;
+use std::http;
+use std::json;
+use std::html;
+use std::net;
+
+fn error_page(conn: int, status: int, text: string) -> void {
+    match http::write_response(conn, status, "text/plain; charset=utf-8", text) {
+        Result::Ok(_) => println("Fehler gesendet: " + str(status)),
+        Result::Err(e) => println("Schreibfehler: " + e)
+    };
+}
+
+fn count_of(session: web::Session) -> int {
+    return match json::get_int(web::session_data(session), "count") {
+        Result::Ok(v) => v,
+        Result::Err(e) => 0
+    };
+}
+
+fn send_form(conn: int, tmpl: html::Template, session: web::Session, token: string, headers: string) -> void {
+    let data = json::make_object();
+    json::set(data, "csrf", json::make_string(token));
+    json::set(data, "count", json::make_int(count_of(session)));
+    match html::render_page_with(conn, 200, tmpl, data, headers) {
+        Result::Ok(_) => println("Formular gesendet"),
+        Result::Err(e) => println("Renderfehler: " + e)
+    };
+}
+
+fn new_session(conn: int, store: web::SessionStore, tmpl: html::Template) -> void {
+    match web::session_new(store) {
+        Result::Ok(session) => form_with_token(conn, tmpl, session),
+        Result::Err(e) => println("Session-Fehler: " + e)
+    };
+}
+
+fn form_with_token(conn: int, tmpl: html::Template, session: web::Session) -> void {
+    match web::csrf_token(session) {
+        Result::Ok(token) => cookie_and_form(conn, tmpl, session, token),
+        Result::Err(e) => println("Token-Fehler: " + e)
+    };
+}
+
+fn cookie_and_form(conn: int, tmpl: html::Template, session: web::Session, token: string) -> void {
+    match web::session_cookie_insecure(session, "sid", 600) {
+        Result::Ok(line) => send_form(conn, tmpl, session, token, line),
+        Result::Err(e) => println("Cookie-Fehler: " + e)
+    };
+}
+
+fn get_form(conn: int, store: web::SessionStore, tmpl: html::Template, cookies: web::Cookies) -> void {
+    match web::session_load(store, cookies, "sid") {
+        Result::Ok(session) => form_with_token(conn, tmpl, session),
+        Result::Err(e) => new_session(conn, store, tmpl)
+    };
+}
+
+fn handle_get(conn: int, store: web::SessionStore, request: http::HttpRequest, tmpl: html::Template) -> void {
+    match web::cookies(request) {
+        Result::Ok(cookies) => get_form(conn, store, tmpl, cookies),
+        Result::Err(e) => error_page(conn, 400, "Cookie-Fehler")
+    };
+}
+
+fn with_cookies(conn: int, store: web::SessionStore, form: web::FormData, cookies: web::Cookies) -> void {
+    match web::session_load(store, cookies, "sid") {
+        Result::Ok(session) => check_token(conn, form, session),
+        Result::Err(e) => error_page(conn, 403, "keine gueltige Sitzung")
+    };
+}
+
+fn load_for_post(conn: int, store: web::SessionStore, request: http::HttpRequest, form: web::FormData) -> void {
+    match web::cookies(request) {
+        Result::Ok(cookies) => with_cookies(conn, store, form, cookies),
+        Result::Err(e) => error_page(conn, 403, "keine Sitzung")
+    };
+}
+
+fn check_token(conn: int, form: web::FormData, session: web::Session) -> void {
+    match web::form_first(form, "csrf") {
+        Option::Some(token) => verify(conn, form, session, token),
+        Option::None => error_page(conn, 403, "CSRF-Token fehlt")
+    };
+}
+
+fn verify(conn: int, form: web::FormData, session: web::Session, token: string) -> void {
+    if !web::csrf_check(session, token) {
+        error_page(conn, 403, "CSRF-Token ungueltig");
+        return;
+    }
+    let note = match web::form_first(form, "note") {
+        Option::Some(v) => v,
+        Option::None => ""
+    };
+    json::set(web::session_data(session), "count", json::make_int(count_of(session) + 1));
+    json::set(web::session_data(session), "note", json::make_string(note));
+    // Nach erfolgreicher Verwendung wird der Token erneuert.
+    match web::csrf_rotate(session) {
+        Result::Ok(fresh) => send_result(conn, session, note, fresh),
+        Result::Err(e) => println("Token-Fehler: " + e)
+    };
+}
+
+fn send_result(conn: int, session: web::Session, note: string, token: string) -> void {
+    let data = json::make_object();
+    json::set(data, "note", json::make_string(note));
+    json::set(data, "count", json::make_int(count_of(session)));
+    json::set(data, "csrf", json::make_string(token));
+    match html::template("<!doctype html><h1>Gespeichert</h1><p>Notiz: {{note}}</p><p>Zaehler: {{count}}</p><p>Neuer Token: {{csrf}}</p>") {
+        Result::Ok(tmpl) => render_result(conn, tmpl, data),
+        Result::Err(e) => error_page(conn, 500, "Vorlagenfehler")
+    };
+}
+
+fn render_result(conn: int, tmpl: html::Template, data: json::JsonValue) -> void {
+    match html::render_page(conn, 200, tmpl, data) {
+        Result::Ok(_) => println("Ergebnis gesendet"),
+        Result::Err(e) => println("Renderfehler: " + e)
+    };
+}
+
+fn handle_post(conn: int, store: web::SessionStore, request: http::HttpRequest) -> void {
+    match web::form_body_request(request) {
+        Result::Ok(form) => load_for_post(conn, store, request, form),
+        Result::Err(e) => error_page(conn, 400, "Formularfehler: " + e)
+    };
+}
+
+fn handle(conn: int, store: web::SessionStore, request: http::HttpRequest, tmpl: html::Template) -> void {
+    if request.method == "GET" {
+        handle_get(conn, store, request, tmpl);
+    } else if request.method == "POST" {
+        handle_post(conn, store, request);
+    } else {
+        error_page(conn, 405, "Methode nicht erlaubt");
+    }
+}
+
+fn run() -> Result<int, string> {
+    let src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>CSRF</title></head>" +
+        "<body><h1>Notiz speichern</h1><p>Zaehler: {{count}}</p>" +
+        "<form method=\"post\" action=\"/save\">" +
+        "<input type=\"hidden\" name=\"csrf\" value=\"{{csrf}}\">" +
+        "<p><input name=\"note\" placeholder=\"Notiz\"></p>" +
+        "<p><button type=\"submit\">Speichern</button></p></form></body></html>";
+    let tmpl = html::template(src)?;
+    let store = web::session_store(16, 600)?;
+    let listener = net::tcp_listen("127.0.0.1", 0, 8)?;
+    println(net::local_port(listener)?);
+    println("CSRF-Server bereit");
+    var i = 0;
+    while i < 5 {
+        let conn = net::tcp_accept(listener)?;
+        match http::read_request(conn) {
+            Result::Ok(request) => handle(conn, store, request, tmpl),
+            Result::Err(e) => println("Lesefehler: " + e)
+        };
+        net::tcp_close(conn);
+        i = i + 1;
+    }
+    net::tcp_close(listener);
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}

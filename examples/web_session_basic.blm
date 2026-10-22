@@ -1,0 +1,102 @@
+// Serverseitige Session: beim ersten Request anlegen, danach über den
+// Cookie wiederaufnehmen. Die Zähldaten liegen nur im Speicher des Servers.
+// Set-Cookie ohne Secure, weil das Beispiel über einfaches HTTP läuft.
+use std::web;
+use std::http;
+use std::json;
+use std::html;
+use std::net;
+
+fn visits(session: web::Session) -> int {
+    return match json::get_int(web::session_data(session), "visits") {
+        Result::Ok(v) => v,
+        Result::Err(e) => 0
+    };
+}
+
+fn bool_text(v: bool) -> string {
+    if v {
+        return "ja";
+    }
+    return "nein";
+}
+
+fn bump(session: web::Session) -> int {
+    let next = visits(session) + 1;
+    json::set(web::session_data(session), "visits", json::make_int(next));
+    return next;
+}
+
+fn send_page(conn: int, tmpl: html::Template, session: web::Session, resumed: bool, headers: string) -> void {
+    let data = json::make_object();
+    json::set(data, "visits", json::make_int(bump(session)));
+    json::set(data, "resumed", json::make_string(bool_text(resumed)));
+    json::set(data, "id", json::make_string(web::session_id(session)));
+    match html::render_page_with(conn, 200, tmpl, data, headers) {
+        Result::Ok(_) => println("Seite gesendet"),
+        Result::Err(e) => println("Renderfehler: " + e)
+    };
+}
+
+fn with_session(conn: int, tmpl: html::Template, session: web::Session, resumed: bool) -> void {
+    match web::session_cookie_insecure(session, "sid", 600) {
+        Result::Ok(line) => send_page(conn, tmpl, session, resumed, line),
+        Result::Err(e) => println("Cookie-Fehler: " + e)
+    };
+}
+
+fn new_session(conn: int, store: web::SessionStore, tmpl: html::Template) -> void {
+    match web::session_new(store) {
+        Result::Ok(session) => with_session(conn, tmpl, session, false),
+        Result::Err(e) => println("Session-Fehler: " + e)
+    };
+}
+
+fn have_cookies(conn: int, store: web::SessionStore, tmpl: html::Template, cookies: web::Cookies) -> void {
+    match web::session_load(store, cookies, "sid") {
+        Result::Ok(session) => with_session(conn, tmpl, session, true),
+        Result::Err(e) => new_session(conn, store, tmpl)
+    };
+}
+
+fn handle(conn: int, store: web::SessionStore, request: http::HttpRequest, tmpl: html::Template) -> void {
+    match web::cookies(request) {
+        Result::Ok(cookies) => have_cookies(conn, store, tmpl, cookies),
+        Result::Err(e) => println("Cookie-Fehler: " + e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Session</title></head>" +
+        "<body><h1>Session</h1><p>Besuche: {{visits}}</p>" +
+        "<p>Wiederaufgenommen: {{resumed}}</p><p>ID: {{id}}</p></body></html>";
+    let tmpl = html::template(src)?;
+    let store = web::session_store(64, 600)?;
+    let listener = net::tcp_listen("127.0.0.1", 0, 8)?;
+    println(net::local_port(listener)?);
+    println("Session-Server bereit");
+    var i = 0;
+    while i < 6 {
+        let conn = net::tcp_accept(listener)?;
+        match http::read_request(conn) {
+            Result::Ok(request) => handle(conn, store, request, tmpl),
+            Result::Err(e) => println("Lesefehler: " + e)
+        };
+        net::tcp_close(conn);
+        i = i + 1;
+    }
+    net::tcp_close(listener);
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}

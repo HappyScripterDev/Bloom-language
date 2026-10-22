@@ -178,6 +178,8 @@ fn auto_links(checked: &CheckedProgram) -> Vec<toolchain::LinkItem> {
             "std::win32" => &["kernel32", "user32"],
             "std::net" | "std::http" => &["ws2_32"],
             "std::tls" => &["ws2_32", "secur32", "crypt32"],
+            "std::web" if cfg!(windows) => &["bcrypt"],
+            "std::web" => &[],
             _ => &[],
         };
         for lib in needed {

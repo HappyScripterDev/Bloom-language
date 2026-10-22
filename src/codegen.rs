@@ -101,6 +101,9 @@ fn c_type(ty: &Type) -> String {
         Type::Html => "bloom_html_handle".to_string(),
         Type::Bytes => "bloom_fs_handle".to_string(),
         Type::Form => "bloom_form_handle".to_string(),
+        Type::Cookies => "bloom_cookies_handle".to_string(),
+        Type::SessionStore => "bloom_session_store_handle".to_string(),
+        Type::Session => "bloom_session_handle".to_string(),
         Type::Struct(name, args) => {
             format!("bloom_struct_{}", named_mangle(name, args))
         }
@@ -259,7 +262,10 @@ impl<'a> CEmitter<'a> {
             | Type::Web
             | Type::Html
             | Type::Bytes
-            | Type::Form => true,
+            | Type::Form
+            | Type::Cookies
+            | Type::SessionStore
+            | Type::Session => true,
             Type::Struct(name, args) => {
                 if let Some(info) = self.checked.structs.get(name) {
                     let bindings: HashMap<String, Type> = info
@@ -304,6 +310,9 @@ impl<'a> CEmitter<'a> {
             Type::Html => Some("bloom_html_retain".to_string()),
             Type::Bytes => Some("bloom_fs_bytes_retain".to_string()),
             Type::Form => Some("bloom_web_form_retain".to_string()),
+            Type::Cookies => Some("bloom_web_cookies_retain".to_string()),
+            Type::SessionStore => Some("bloom_web_session_store_retain".to_string()),
+            Type::Session => Some("bloom_web_session_retain".to_string()),
             Type::Array(elem) => Some(format!("bloom_arr_{}_clone", arr_suffix(elem))),
             Type::Slice(elem) => Some(format!("bloom_slice_{}_clone", arr_suffix(elem))),
             Type::Struct(name, args) | Type::Enum(name, args) => {
@@ -325,6 +334,9 @@ impl<'a> CEmitter<'a> {
             Type::Html => Some("bloom_html_release".to_string()),
             Type::Bytes => Some("bloom_fs_bytes_release".to_string()),
             Type::Form => Some("bloom_web_form_release".to_string()),
+            Type::Cookies => Some("bloom_web_cookies_release".to_string()),
+            Type::SessionStore => Some("bloom_web_session_store_release".to_string()),
+            Type::Session => Some("bloom_web_session_release".to_string()),
             Type::Array(elem) => Some(format!("bloom_arr_{}_drop", arr_suffix(elem))),
             Type::Slice(elem) => Some(format!("bloom_slice_{}_drop", arr_suffix(elem))),
             Type::Struct(name, args) | Type::Enum(name, args) => {
@@ -655,7 +667,13 @@ impl<'a> CEmitter<'a> {
                 "static bloom_web_handle bloom_web_retain(bloom_web_handle h);\n\
                  static void bloom_web_release(bloom_web_handle *h);\n\
                  static bloom_form_handle bloom_web_form_retain(bloom_form_handle h);\n\
-                 static void bloom_web_form_release(bloom_form_handle *h);\n\n",
+                 static void bloom_web_form_release(bloom_form_handle *h);\n\
+                 static bloom_cookies_handle bloom_web_cookies_retain(bloom_cookies_handle h);\n\
+                 static void bloom_web_cookies_release(bloom_cookies_handle *h);\n\
+                 static bloom_session_store_handle bloom_web_session_store_retain(bloom_session_store_handle h);\n\
+                 static void bloom_web_session_store_release(bloom_session_store_handle *h);\n\
+                 static bloom_session_handle bloom_web_session_retain(bloom_session_handle h);\n\
+                 static void bloom_web_session_release(bloom_session_handle *h);\n\n",
             );
         }
         if self

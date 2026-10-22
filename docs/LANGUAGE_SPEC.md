@@ -1364,11 +1364,46 @@ if m.status == 200 {
 | `form_values(form, name)` | `FormData, string -> [string]` |
 | `form_names(form)` | `FormData -> [string]` |
 | `form_encode(form)` | `FormData -> Result<string, string>` |
+| `cookies(request)` | `HttpRequest -> Result<Cookies, string>` |
+| `cookie_count(cookies)` | `Cookies -> int` |
+| `cookie_has(cookies, name)` | `Cookies, string -> bool` |
+| `cookie_get(cookies, name)` | `Cookies, string -> Result<string, string>` |
+| `cookie_first(cookies, name)` | `Cookies, string -> Option<string>` |
+| `cookie_names(cookies)` | `Cookies -> [string]` |
+| `set_cookie(name, value, options)` | `string, string, CookieOptions -> Result<string, string>` |
+| `delete_cookie(name, path, insecure_http)` | `string, string, bool -> Result<string, string>` |
+| `cookie_headers(lines)` | `[string] -> Result<string, string>` |
+| `session_store(max_sessions, ttl_seconds)` | `int, int -> Result<SessionStore, string>` |
+| `session_count(store)` | `SessionStore -> int` |
+| `session_new(store)` | `SessionStore -> Result<Session, string>` |
+| `session_load(store, cookies, cookie_name)` | `SessionStore, Cookies, string -> Result<Session, string>` |
+| `session_id(session)` | `Session -> string` |
+| `session_data(session)` | `Session -> JsonValue` |
+| `session_destroy(store, session)` | `SessionStore, Session -> bool` |
+| `session_expire(store)` | `SessionStore -> int` |
+| `session_cookie(session, name, max_age)` | `Session, string, int -> Result<string, string>` |
+| `session_cookie_insecure(session, name, max_age)` | `Session, string, int -> Result<string, string>` |
+| `csrf_token(session)` | `Session -> Result<string, string>` |
+| `csrf_check(session, token)` | `Session, string -> bool` |
+| `csrf_rotate(session)` | `Session -> Result<string, string>` |
+| `csrf_clear(session)` | `Session -> void` |
 
 ```bloom
 pub struct Router { id }   // undurchsichtiges, verwaltetes Handle
 pub struct Match  { status: int, name, allow, params }  // params: JsonValue
 pub struct FormData { id } // undurchsichtiges, verwaltetes Handle
+pub struct Cookies { id }  // undurchsichtiges, verwaltetes Handle
+pub struct SessionStore { id }
+pub struct Session { id }
+
+// Wird explizit gebaut, damit jede Sicherheitsentscheidung sichtbar ist:
+pub struct CookieOptions {
+    path: string,          // "" = kein Path-Attribut, sonst beginnt mit "/"
+    max_age: int,          // 0 = kein Max-Age, sonst 1..31536000
+    same_site: string,     // "Lax", "Strict", "None" oder "" (weglassen)
+    http_only: bool,
+    insecure_http: bool    // true = Secure weglassen (nur Entwicklung)
+}
 ```
 
 - **Ausführungsmodell:** Alles ist synchron; Bloom hat keine Closures,
@@ -1489,6 +1524,78 @@ pub struct FormData { id } // undurchsichtiges, verwaltetes Handle
   weiterhin automatisch; es gibt keinen neuen Rohausgabe-Pfad.
   `FormData` ist ein verwalteter Besitzwert (Referenzzählung, kein
   manuelles Freigeben).
+- **Cookies lesen:** `cookies(request)` liest **alle** `Cookie`-Header in
+  Reihenfolge. Paare werden an `;` getrennt, das erste `=` trennt Name
+  und Wert, Leerraum um beide wird entfernt. Werte werden **wörtlich**
+  zurückgegeben: keine Prozentdekodierung, kein Entfernen von
+  Anführungszeichen. Namen müssen RFC-Token sein (1..64 Bytes), Werte
+  druckbares ASCII ohne `"`, `,`, `;`, `\` (max. 4096 Bytes); ungültige
+  Paare werden ignoriert, statt die ganze Anfrage scheitern zu lassen.
+  Mehrere `Cookie`-Header werden zusammengeführt; insgesamt höchstens 64
+  Cookies, weitere werden ignoriert. `cookie_get` verlangt genau einen
+  Wert: ein fehlender **oder mehrfach** vorkommender Name ist ein `Err`
+  (doppelte Cookies können z. B. durch Cookie-Tossing entstehen und
+  werden nie stillschweigend auf den ersten Wert reduziert).
+  `cookie_first` liefert den ersten Wert, `cookie_names` die
+  verschiedenen Namen in Reihenfolge des ersten Auftretens.
+- **`Set-Cookie` erzeugen:** `set_cookie` baut aus
+  `CookieOptions` eine validierte Kopfzeile der Form
+  `Set-Cookie: name=value[; Path=…][; Max-Age=…][; HttpOnly][; Secure][; SameSite=…]`.
+  Name/Wert/Pfad werden geprüft; CR/LF, Steuerbytes, `;` in Werten und
+  ungültige Attributwerte sind Fehler. `Secure` ist der Standard und
+  lässt sich nur über das ausdrücklich benannte `insecure_http`-Feld
+  weglassen (nur für Entwicklung über HTTP). `SameSite=None` ohne
+  `Secure` wird abgelehnt, ebenso unbekannte SameSite-Werte. Ein
+  `Domain`-Attribut gibt es bewusst nicht (kein Domain-Scope).
+  `delete_cookie(name, path, insecure_http)` setzt denselben Namen und
+  Pfad mit leerem Wert und `Max-Age=0`; der Pfad muss beim Setzen und
+  Löschen übereinstimmen. `cookie_headers([...])` verbindet mehrere
+  solcher Zeilen mit CRLF zu einem Header-Block (jede Zeile wird erneut
+  geprüft). `std::http` schreibt jede Header-Zeile einzeln, daher
+  bleiben mehrere `Set-Cookie`-Header als getrennte Zeilen erhalten.
+- **Sessions:** `session_store(max_sessions, ttl_seconds)` erzeugt einen
+  reinen In-Memory-Store (max. 1..65535 Sessions, TTL 1..31536000
+  Sekunden **absolut** ab Erzeugung). `session_new` erzeugt eine
+  Session mit **32 zufälligen Bytes** aus der Betriebssystem-CSPRNG
+  (Windows `BCryptGenRandom`, POSIX `/dev/urandom`) als Base64url ohne
+  Padding (43 Zeichen); schlägt die Zufallsquelle fehl, ist das ein
+  `Err` und es gibt keinen unsicheren Ersatz. `session_load` liest den
+  benannten Cookie, lehnt fehlende, doppelte, malformed, unbekannte und
+  abgelaufene IDs ab; die Anwendung entscheidet selbst, ob sie dann
+  `session_new` aufruft (und weiß dadurch, ob eine Session
+  wiederaufgenommen wurde). `session_data` liefert das gemeinsame
+  JSON-Objekt (Änderungen sind für alle Handles sichtbar).
+  `session_destroy` entfernt die Session aus dem Store; bestehende
+  Handles behalten ihre Daten bis zum Scope-Ende. `session_expire`
+  entfernt abgelaufene Sessions und liefert die Anzahl;
+  `session_save` gibt es nicht, die Daten liegen direkt im Store.
+  Ist der Store voll, schlägt `session_new` fehl, statt eine aktive
+  Session zu verdrängen. Ablauf wird mit der **monotonen** Uhr
+  berechnet; ein Sprung der Systemuhr verlängert oder verkürzt nichts.
+  `session_count` liefert die Zahl der aktuell gespeicherten Einträge
+  (abgelaufene werden bei `session_new`, `session_load` und
+  `session_expire` entfernt). Sessions gehen beim Prozessende verloren;
+  einen verteilten Store gibt es nicht.
+- **Session-Cookies:** `session_cookie(session, name, max_age)` erzeugt
+  eine `Set-Cookie`-Zeile mit `Path=/`, `HttpOnly`, `Secure`,
+  `SameSite=Lax`, `Max-Age=max_age` (1..31536000).
+  `session_cookie_insecure` lässt `Secure` bewusst weg und ist nur für
+  lokale HTTP-Entwicklung gedacht.
+- **CSRF:** `csrf_token(session)` liefert das Token der Session und
+  erzeugt beim ersten Aufruf 32 zufällige Bytes (Base64url,
+  43 Zeichen); `csrf_check` vergleicht in konstanter Zeit (bei gleicher
+  Länge) und schlägt für fehlende Tokens und Tokens anderer Sessions
+  fehl; `csrf_rotate` erzeugt ein neues Token, `csrf_clear` verwirft
+  es. Der Token liegt getrennt von den Anwendungsdaten in der Session.
+  Ein CSRF-Token ist **keine** Authentifizierung und keine
+  Autorisierung; Anwendungen müssen `csrf_check` bei jedem
+  zustandsverändernden Request selbst aufrufen. `SameSite` ist nur
+  eine zusätzliche Schutzschicht.
+- **Sicherheit (Cookies/Sessions):** Cookie- und Sessionwerte sind
+  nicht vertrauenswürdig; Dekodieren ist keine Validierung.
+  Session-IDs dürfen nur über `Secure`-Cookies übertragen werden (außer
+  bewusst in der lokalen Entwicklung), und die In-Memory-Sessions sind
+  nicht threadsicher (Bloom hat keine Threads).
 
 ### 13.13 Standardmodul `std::html` (Escaping und Templates)
 
@@ -1692,10 +1799,14 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
 - **Streaming/Range-Requests, ETag/Last-Modified, Verzeichnis-Indizes
   und automatisches Neuladen von Dateien bei `web::static_file` bzw.
   `html::template_file`**
-- **Multipart-Formulare und Datei-Uploads, Sessions, CSRF-Tokens und
-  automatische Formularvalidierung** (Formulare sind reine
+- **Multipart-Formulare und Datei-Uploads, automatische
+  Formularvalidierung** (Formulare sind reine
   `application/x-www-form-urlencoded`-Daten; alles Weitere ist Sache
   der Anwendung)
+- **Persistente oder verteilte Sessions, Benutzerkonten,
+  Passworthashes, Login-Frameworks, Rollen/Rechte, OAuth/OIDC, JWT,
+  vollständige Middleware** (Sessions liegen nur im Speicher des
+  Prozesses und sind keine Anmeldung)
 - **C-Structs by value, Funktionszeiger/Callbacks, variadische
   C-Funktionen, Pointer-Arithmetik, Dereferenzierung von `rawptr`**
 - **UDP, asynchrone/Thread-Netzwerkoperationen, Threads allgemein**

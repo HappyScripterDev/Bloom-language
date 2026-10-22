@@ -266,6 +266,41 @@ frei. Testseitig prüfen `form_body_parse_natively`,
 `web_form_errors_natively` Parsen, Limits, Round-trip und den echten
 HTTP-Weg inklusive Leak-Zählern.
 
+## Cookies, Sessions und CSRF (`std::web`)
+
+Alle drei liegen in `bloom_web.c`, weil sie dieselbe Request-/
+Header-Infrastruktur benutzen. Drei verwaltete Handle-Typen:
+`Type::Cookies` (`bloom_web_cookies`, Paarliste), `Type::SessionStore`
+(`bloom_web_session_store`, Array aus Session-Zeigern plus Kapazität
+und TTL) und `Type::Session` (`bloom_web_session`, ID, CSRF-Token,
+JSON-Objekt, Ablaufzeit). Der Store hält eine Referenz pro Session,
+jeder Bloom-Handle eine weitere; `session_destroy` gibt nur die
+Store-Referenz frei, bestehende Handles bleiben gültig, bis ihr Scope
+endet. `session_load` retained die gefundene Session und gibt sie als
+neuen Besitzwert zurück.
+
+Sessions bekommen 32 Zufallsbytes aus `bloom_web_random_bytes`:
+Windows ruft `BCryptGenRandom` (Link gegen `bcrypt.lib` über
+`auto_links` in `compiler.rs`, nur Windows), POSIX liest
+`/dev/urandom`. Es gibt bewusst keinen Userspace-Fallback. Für die
+Fehlerpfad-Tests kennt die Runtime den internen Hook
+`BLOOM_WEB_TEST_FAIL_RANDOM`; er ist kein Teil der öffentlichen API.
+IDs und CSRF-Tokens werden mit einer kleinen Base64url-Implementierung
+ohne Padding auf 43 Zeichen gebracht. Der Ablauf nutzt
+`bloom_time_monotonic_millis` aus `std::time`; deshalb registriert
+`std::web` zusätzlich die `std::time`-Signaturen (sonst fehlt die
+Uhr im generierten C). `csrf_check` vergleicht gleich lange Tokens
+byteweise mit XOR-Akkumulation.
+
+`Set-Cookie`-Zeilen werden als normalisierte Strings erzeugt
+(`Set-Cookie: name=value; …`), nie durch freies Zusammensetzen in
+Bloom-Code. `std::http` parst den `headers`-Block und schreibt jede
+Zeile einzeln — mehrere `Set-Cookie`-Header bleiben dadurch getrennte
+Header. Tests: `web_cookie_api_natively`, `web_session_api_natively`,
+`web_session_random_failure_natively`, `web_cookies_e2e`,
+`web_session_basic_e2e`, `web_session_expiry_e2e`,
+`web_session_errors_e2e`, `web_csrf_form_e2e`.
+
 ## Formatter (`src/fmt.rs`)
 
 `bloom fmt` nutzt `lex_with_comments` (der Compiler-Pfad `lex` verwirft

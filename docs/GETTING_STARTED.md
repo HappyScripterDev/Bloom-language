@@ -612,6 +612,102 @@ Beispiele: `examples/form_parse.blm`,
 `examples/form_multiple_values.blm`, `examples/form_encode.blm`,
 `examples/web_form_server.blm`, `examples/web_form_errors.blm`.
 
+## 16b. Cookies, Sessions und CSRF
+
+Cookies lesen:
+
+```bloom
+match web::cookies(request) {
+    Result::Ok(cookies) => println("Cookies: " + join(web::cookie_names(cookies), ", ")),
+    Result::Err(e) => println("Cookie-Fehler: " + e)
+};
+```
+
+`cookie_get` gibt `Err`, wenn ein Cookie fehlt oder mehrfach vorkommt.
+Mehrfach ist Absicht: zwei Cookies mit demselben Namen sind mehrdeutig
+und werden nicht stillschweigend zu einem Wert zusammengefasst.
+`cookie_first` nimmt bewusst den ersten.
+
+Cookie setzen:
+
+```bloom
+let options = web::CookieOptions {
+    path: "/",
+    max_age: 3600,
+    same_site: "Lax",
+    http_only: true,
+    insecure_http: false   // false = Secure ist gesetzt
+};
+let line = web::set_cookie("theme", "dark", options)?;
+// line ist "Set-Cookie: theme=dark; Path=/; Max-Age=3600; HttpOnly; Secure; SameSite=Lax"
+```
+
+`insecure_http: true` lässt `Secure` weg und ist nur für lokale
+HTTP-Entwicklung gedacht. Löschen geht mit `delete_cookie(name, path,
+insecure_http)` und muss denselben Pfad verwenden wie beim Setzen.
+
+Sessions:
+
+```bloom
+fn run() -> Result<int, string> {
+    let store = web::session_store(1000, 3600)?;  // max. 1000 Sessions, 1 Stunde
+    let session = web::session_new(store)?;
+    let id = web::session_id(session);
+    println(id);                                   // 43 Zeichen Base64url
+
+    // Später, aus einer Anfrage:
+    let cookies = web::cookies(request)?;
+    let resumed = web::session_load(store, cookies, "sid")?;
+    let data = web::session_data(resumed);
+    json::set(data, "user", json::make_string("ada"))?;
+    println(json::get_string(data, "user")?);
+    return Result::Ok(0);
+}
+```
+
+Die ID kommt aus 32 echten Zufallsbytes (Windows `BCryptGenRandom`,
+POSIX `/dev/urandom`). Geht die Zufallsquelle nicht, gibt es einen
+Fehler, keinen schwächeren Ersatz. `session_load` scheitert bei
+fehlenden, kaputten, unbekannten und abgelaufenen IDs; wenn du dann
+eine neue Session willst, rufst du selbst `session_new` auf. So weißt
+du immer, ob eine Session wiederverwendet wurde.
+
+Sessions leben nur im Speicher und sind nach einem Neustart weg.
+Ablauf ist absolut (nicht gleitend) und wird mit der monotonen Uhr
+berechnet. Ist der Store voll, schlägt `session_new` fehl, statt eine
+aktive Session zu verdrängen.
+
+Den Cookie für die Session baut `session_cookie(session, "sid", 3600)`
+(Secure, HttpOnly, SameSite=Lax, Path=/). Für HTTP-Entwicklung gibt es
+`session_cookie_insecure`.
+
+CSRF:
+
+```bloom
+let token = web::csrf_token(session)?;   // im Formular als hidden field
+// beim Speichern:
+if !web::csrf_check(session, form_token) {
+    // 403
+}
+web::csrf_rotate(session);               // nach Erfolg neuen Token
+```
+
+Der Token ist 43 Zeichen Zufall, gehört zu genau dieser Session und
+wird in konstanter Zeit verglichen. `csrf_check` ist **keine**
+Anmeldung und schützt nur, wenn du es bei jedem verändernden Request
+selbst aufrufst. `SameSite` hilft zusätzlich, ersetzt die Prüfung aber
+nicht. Mehrere `Set-Cookie`-Header schickst du mit
+`web::cookie_headers([...])` oder als einzelne Zeilen im Header-Block
+von `write_response_full`.
+
+Plattformen: Getestet ist die Zufallsquelle unter Windows. Der
+POSIX-Pfad (`/dev/urandom`) ist implementiert, aber in diesem Repo
+nicht getestet.
+
+Beispiele: `examples/web_cookies.blm`, `examples/web_session_basic.blm`,
+`examples/web_session_expiry.blm`, `examples/web_csrf_form.blm`,
+`examples/web_session_errors.blm`.
+
 ## 17. HTTPS
 
 ```bloom

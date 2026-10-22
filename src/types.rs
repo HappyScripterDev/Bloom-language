@@ -103,6 +103,13 @@ pub enum Type {
     /// Managed like `Type::Json`; the handle lives inside the built-in
     /// `std::web::FormData` struct.
     Form,
+    /// Internal handle to parsed request cookies (`std::web::Cookies`).
+    Cookies,
+    /// Internal handle to a server-side session store
+    /// (`std::web::SessionStore`).
+    SessionStore,
+    /// Internal handle to a server-side session (`std::web::Session`).
+    Session,
 }
 
 impl Type {
@@ -170,6 +177,9 @@ pub fn mangle_type(ty: &Type) -> String {
         Type::Html => "html".to_string(),
         Type::Bytes => "bytes".to_string(),
         Type::Form => "form".to_string(),
+        Type::Cookies => "cookies".to_string(),
+        Type::SessionStore => "session_store".to_string(),
+        Type::Session => "session".to_string(),
         Type::Param(name) => c_ident(name),
     }
 }
@@ -191,6 +201,9 @@ impl fmt::Display for Type {
             Type::Html => write!(f, "std::html::Template"),
             Type::Bytes => write!(f, "std::fs::Bytes"),
             Type::Form => write!(f, "std::web::FormData"),
+            Type::Cookies => write!(f, "std::web::Cookies"),
+            Type::SessionStore => write!(f, "std::web::SessionStore"),
+            Type::Session => write!(f, "std::web::Session"),
             Type::Struct(name, args) => {
                 if args.is_empty() {
                     write!(f, "{}", name)
@@ -225,5 +238,15 @@ mod tests {
     #[test]
     fn form_type_is_named_like_the_other_managed_handles() {
         assert_eq!(Type::Form.to_string().split("::").last(), Some("FormData"));
+    }
+
+    #[test]
+    fn cookie_and_session_types_are_displayed_and_mangled() {
+        assert_eq!(Type::Cookies.to_string(), "std::web::Cookies");
+        assert_eq!(Type::SessionStore.to_string(), "std::web::SessionStore");
+        assert_eq!(Type::Session.to_string(), "std::web::Session");
+        assert_eq!(mangle_type(&Type::Cookies), "cookies");
+        assert_eq!(mangle_type(&Type::SessionStore), "session_store");
+        assert_eq!(mangle_type(&Type::Session), "session");
     }
 }

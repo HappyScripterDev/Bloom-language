@@ -12,7 +12,7 @@ schreiben kann: Dateien lesen, im Netzwerk reden, JSON verarbeiten,
 HTML-Seiten ausliefern. Alles davon ist schon eingebaut und braucht
 keine externen Bibliotheken.
 
-Stand: **0.16.0**. Getestet wird auf Windows (MSVC). Linux und macOS
+Stand: **0.17.0**. Getestet wird auf Windows (MSVC). Linux und macOS
 sind im Code vorgesehen, aber ich entwickle und teste fast nur auf
 Windows.
 
@@ -77,7 +77,8 @@ fn main() -> int {
   raus, statt dass irgendwo Müll gelesen wird.
 - Standardbibliothek ohne Ballast: `std.math`, `std.fs`, `std.process`,
   `std.time`, `std.net`, `std.http` (Client und Server, mit HTTPS),
-  `std.json`, `std.path`, `std.web` (Router und Formulare), `std.html`.
+  `std.json`, `std.path`, `std.web` (Router, Formulare, Cookies, Sessions,
+  CSRF), `std.html`.
 - `bloom fmt` räumt den Quelltext auf, `bloom check` prüft ohne zu
   bauen, `bloom init` legt ein Projekt an.
 - FFI zu C und ein paar Windows-Funktionen, falls man doch mal ans
@@ -102,21 +103,26 @@ Wenn Bloom keinen C-Compiler findet, sagt es dir, was fehlt. Welchen
 es nimmt, kann man mit `BLOOM_CC` erzwingen (`set BLOOM_CC=clang`).
 Mehr dazu steht in [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
-## Was in 0.16 dazugekommen ist
+## Was in 0.17 dazugekommen ist
 
-- Formulare: `application/x-www-form-urlencoded`-Bodies parsen
-  (`web::form_body`, `web::form_body_request`). Wiederholte Feldnamen
-  wie bei Checkbox-Gruppen bleiben erhalten, in der Reihenfolge des
-  Requests.
-- Auslesen: `form_has`, `form_get` (nur bei genau einem Wert),
-  `form_first`, `form_values`, `form_names`, `form_count`. Fehlendes
-  Feld und vorhandenes Feld mit leerem Wert sind zwei verschiedene
-  Dinge.
-- Zurückschreiben: `web::form_encode` macht aus den Daten wieder
-  URL-kodierten Text. Parse → Encode → Parse ergibt dasselbe.
-- Limits: Body 1 MiB, 4096 Einträge, Name 256 Bytes, Wert 64 KiB.
-  Ungültige Prozentkodierung oder ungültiges UTF-8 sind Fehler und
-  werden nicht stillschweigend repariert.
+- Cookies lesen: `web::cookies(request)` liefert alle Cookies der
+  Anfrage. Doppelte Namen sind absichtlich mehrdeutig und werden nicht
+  stillschweigend auf den ersten Wert reduziert.
+- Cookies setzen: `web::set_cookie` mit geprüften Attributen
+  (`Path`, `Max-Age`, `HttpOnly`, `SameSite`). `Secure` ist der
+  Standard; wer über HTTP entwickeln will, muss das mit
+  `insecure_http: true` ausdrücklich sagen. `web::delete_cookie` räumt
+  mit demselben Namen und Pfad wieder auf.
+- Sessions: `web::session_store` mit begrenzter Anzahl und absoluter
+  Lebensdauer, `session_new` / `session_load` mit 32 zufälligen Bytes
+  aus der Betriebssystem-CSPRNG, Daten als JSON pro Session. Ablauf
+  läuft über die monotone Uhr, volle Stores lehnen neue Sessions ab,
+  statt aktive zu verdrängen.
+- CSRF: `web::csrf_token`, `csrf_check` (konstante Zeit), `csrf_rotate`
+  und `csrf_clear`, gebunden an die Session.
+- Wichtig: Das ist Grundlagenzeug, keine Anmeldung. Sessions liegen nur
+  im Speicher und sind nach einem Neustart weg. Die CSRF-Prüfung muss
+  die Anwendung bei jedem verändernden Request selbst aufrufen.
 
 ## Was (noch) nicht geht
 
@@ -145,7 +151,7 @@ Damit hier keine falschen Erwartungen entstehen:
 ## Selbst entwickeln
 
 ```bash
-cargo test                    # 492 Tests: Unit + echte kompilierte Programme
+cargo test                    # 501 Tests: Unit + echte kompilierte Programme
 cargo clippy --all-targets
 cargo fmt
 ```
@@ -162,6 +168,8 @@ bloom run examples/web_json_api.blm
 bloom run examples/template_file.blm
 bloom run examples/form_parse.blm
 bloom run examples/web_form_server.blm
+bloom run examples/web_cookies.blm
+bloom run examples/web_csrf_form.blm
 ```
 
 ## Lizenz

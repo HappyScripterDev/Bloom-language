@@ -66,6 +66,11 @@ typedef int64_t bloom_fs_handle;
  */
 typedef int64_t bloom_form_handle;
 
+/* Handles for cookies, session stores and sessions (std::web, bloom_web.c). */
+typedef int64_t bloom_cookies_handle;
+typedef int64_t bloom_session_store_handle;
+typedef int64_t bloom_session_handle;
+
 /*
  * Calling convention for `extern "system"` declarations. On 32-bit Windows
  * this is `__stdcall`; on x64 and other targets it is the default

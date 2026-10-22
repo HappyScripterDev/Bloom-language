@@ -1609,11 +1609,13 @@ impl Checker {
         // std::web builds on the JSON value type (route parameters) and the
         // HTTP request/response helpers; register their signatures so the
         // required structs, Result instantiations and runtimes exist. The
-        // HTTP runtime in turn needs the net and TLS runtimes.
+        // HTTP runtime in turn needs the net and TLS runtimes; sessions use
+        // the monotonic clock from std::time.
         self.register_json_functions("std::json");
         self.register_http_functions("std::http");
         self.register_net_functions("std::net");
         self.register_tls_functions("std::tls");
+        self.register_time_functions("std::time");
         let span = Span::point(1, 1);
         let router_canonical = format!("{}::Router", module);
         self.structs
@@ -1672,6 +1674,41 @@ impl Checker {
                 is_pub: true,
             });
         let form_ty = Type::Struct(format!("{}::FormData", module), Vec::new());
+        for (name, fields) in [
+            ("Cookies", vec![("id", Type::Cookies)]),
+            ("SessionStore", vec![("id", Type::SessionStore)]),
+            ("Session", vec![("id", Type::Session)]),
+            (
+                "CookieOptions",
+                vec![
+                    ("path", Type::String),
+                    ("max_age", Type::Int),
+                    ("same_site", Type::String),
+                    ("http_only", Type::Bool),
+                    ("insecure_http", Type::Bool),
+                ],
+            ),
+        ] {
+            let canonical = format!("{}::{}", module, name);
+            let fields = fields
+                .into_iter()
+                .map(|(n, ty)| StructField {
+                    name: n.to_string(),
+                    ty,
+                })
+                .collect();
+            self.structs.entry(canonical).or_insert_with(|| StructInfo {
+                params: Vec::new(),
+                fields,
+                span,
+                module: module.to_string(),
+                is_pub: true,
+            });
+        }
+        let cookies_ty = Type::Struct(format!("{}::Cookies", module), Vec::new());
+        let store_ty = Type::Struct(format!("{}::SessionStore", module), Vec::new());
+        let session_ty = Type::Struct(format!("{}::Session", module), Vec::new());
+        let options_ty = Type::Struct(format!("{}::CookieOptions", module), Vec::new());
         let request_ty = Type::Struct("std::http::HttpRequest".to_string(), Vec::new());
         let str_err = |ok: Type| Type::Enum("Result".to_string(), vec![ok, Type::String]);
         let opt_str = Type::Enum("Option".to_string(), vec![Type::String]);
@@ -1759,7 +1796,7 @@ impl Checker {
                 "form_first",
                 "bloom_web_form_first",
                 vec![form_ty.clone(), Type::String],
-                opt_str,
+                opt_str.clone(),
             ),
             (
                 "form_values",
@@ -1778,6 +1815,144 @@ impl Checker {
                 "bloom_web_form_encode",
                 vec![form_ty],
                 str_err(Type::String),
+            ),
+            (
+                "cookies",
+                "bloom_web_cookies_parse",
+                vec![request_ty.clone()],
+                str_err(cookies_ty.clone()),
+            ),
+            (
+                "cookie_count",
+                "bloom_web_cookie_count",
+                vec![cookies_ty.clone()],
+                Type::Int,
+            ),
+            (
+                "cookie_has",
+                "bloom_web_cookie_has",
+                vec![cookies_ty.clone(), Type::String],
+                Type::Bool,
+            ),
+            (
+                "cookie_get",
+                "bloom_web_cookie_get",
+                vec![cookies_ty.clone(), Type::String],
+                str_err(Type::String),
+            ),
+            (
+                "cookie_first",
+                "bloom_web_cookie_first",
+                vec![cookies_ty.clone(), Type::String],
+                opt_str.clone(),
+            ),
+            (
+                "cookie_names",
+                "bloom_web_cookie_names",
+                vec![cookies_ty.clone()],
+                Type::Array(Box::new(Type::String)),
+            ),
+            (
+                "set_cookie",
+                "bloom_web_set_cookie",
+                vec![Type::String, Type::String, options_ty.clone()],
+                str_err(Type::String),
+            ),
+            (
+                "delete_cookie",
+                "bloom_web_delete_cookie",
+                vec![Type::String, Type::String, Type::Bool],
+                str_err(Type::String),
+            ),
+            (
+                "cookie_headers",
+                "bloom_web_cookie_headers",
+                vec![Type::Array(Box::new(Type::String))],
+                str_err(Type::String),
+            ),
+            (
+                "session_store",
+                "bloom_web_session_store_new",
+                vec![Type::Int, Type::Int],
+                str_err(store_ty.clone()),
+            ),
+            (
+                "session_count",
+                "bloom_web_session_count",
+                vec![store_ty.clone()],
+                Type::Int,
+            ),
+            (
+                "session_new",
+                "bloom_web_session_new",
+                vec![store_ty.clone()],
+                str_err(session_ty.clone()),
+            ),
+            (
+                "session_load",
+                "bloom_web_session_load",
+                vec![store_ty.clone(), cookies_ty.clone(), Type::String],
+                str_err(session_ty.clone()),
+            ),
+            (
+                "session_id",
+                "bloom_web_session_id",
+                vec![session_ty.clone()],
+                Type::String,
+            ),
+            (
+                "session_data",
+                "bloom_web_session_data",
+                vec![session_ty.clone()],
+                json_ty.clone(),
+            ),
+            (
+                "session_destroy",
+                "bloom_web_session_destroy",
+                vec![store_ty.clone(), session_ty.clone()],
+                Type::Bool,
+            ),
+            (
+                "session_expire",
+                "bloom_web_session_expire",
+                vec![store_ty.clone()],
+                Type::Int,
+            ),
+            (
+                "session_cookie",
+                "bloom_web_session_cookie",
+                vec![session_ty.clone(), Type::String, Type::Int],
+                str_err(Type::String),
+            ),
+            (
+                "session_cookie_insecure",
+                "bloom_web_session_cookie_insecure",
+                vec![session_ty.clone(), Type::String, Type::Int],
+                str_err(Type::String),
+            ),
+            (
+                "csrf_token",
+                "bloom_web_csrf_token",
+                vec![session_ty.clone()],
+                str_err(Type::String),
+            ),
+            (
+                "csrf_check",
+                "bloom_web_csrf_check",
+                vec![session_ty.clone(), Type::String],
+                Type::Bool,
+            ),
+            (
+                "csrf_rotate",
+                "bloom_web_csrf_rotate",
+                vec![session_ty.clone()],
+                str_err(Type::String),
+            ),
+            (
+                "csrf_clear",
+                "bloom_web_csrf_clear",
+                vec![session_ty],
+                Type::Void,
             ),
         ];
         for (name, c_name, params, ret) in defs {

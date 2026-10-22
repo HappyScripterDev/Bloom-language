@@ -1,0 +1,91 @@
+// Eingehende Cookies lesen und einen Cookie setzen.
+// Startet auf einem freien Port, gibt ihn aus und beendet sich nach
+// 6 Anfragen. Der Set-Cookie-Header wird hier absichtlich ohne Secure
+// erzeugt, weil das Beispiel über einfaches HTTP läuft (nur für lokale
+// Entwicklung gedacht).
+use std::web;
+use std::http;
+use std::json;
+use std::html;
+use std::net;
+
+fn cookie_or(cookies: web::Cookies, name: string, fallback: string) -> string {
+    return match web::cookie_first(cookies, name) {
+        Option::Some(v) => v,
+        Option::None => fallback
+    };
+}
+
+fn cookie_names_text(cookies: web::Cookies) -> string {
+    let names = web::cookie_names(cookies);
+    if len(names) == 0 {
+        return "(keine)";
+    }
+    return join(names, ", ");
+}
+
+fn send_page(conn: int, tmpl: html::Template, cookies: web::Cookies, headers: string) -> void {
+    let data = json::make_object();
+    json::set(data, "names", json::make_string(cookie_names_text(cookies)));
+    json::set(data, "lang", json::make_string(cookie_or(cookies, "lang", "(fehlt)")));
+    json::set(data, "theme", json::make_string(cookie_or(cookies, "theme", "(fehlt)")));
+    match html::render_page_with(conn, 200, tmpl, data, headers) {
+        Result::Ok(_) => println("Seite gesendet"),
+        Result::Err(e) => println("Renderfehler: " + e)
+    };
+}
+
+fn handle(conn: int, request: http::HttpRequest, tmpl: html::Template, options: web::CookieOptions) -> void {
+    match web::cookies(request) {
+        Result::Ok(cookies) => set_and_send(conn, tmpl, cookies, options),
+        Result::Err(e) => println("Cookie-Fehler: " + e)
+    };
+}
+
+fn set_and_send(conn: int, tmpl: html::Template, cookies: web::Cookies, options: web::CookieOptions) -> void {
+    match web::set_cookie("last", "gesehen", options) {
+        Result::Ok(line) => send_page(conn, tmpl, cookies, line),
+        Result::Err(e) => println("Set-Cookie-Fehler: " + e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Cookies</title></head>" +
+        "<body><h1>Cookies</h1><p>Namen: {{names}}</p>" +
+        "<p>lang: {{lang}}</p><p>theme: {{theme}}</p></body></html>";
+    let tmpl = html::template(src)?;
+    let options = web::CookieOptions {
+        path: "/",
+        max_age: 0,
+        same_site: "Lax",
+        http_only: true,
+        insecure_http: true
+    };
+    let listener = net::tcp_listen("127.0.0.1", 0, 8)?;
+    println(net::local_port(listener)?);
+    println("Cookie-Server bereit");
+    var i = 0;
+    while i < 6 {
+        let conn = net::tcp_accept(listener)?;
+        match http::read_request(conn) {
+            Result::Ok(request) => handle(conn, request, tmpl, options),
+            Result::Err(e) => println("Lesefehler: " + e)
+        };
+        net::tcp_close(conn);
+        i = i + 1;
+    }
+    net::tcp_close(listener);
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}

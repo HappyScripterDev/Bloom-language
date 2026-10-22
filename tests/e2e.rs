@@ -7361,3 +7361,1086 @@ fn web_form_errors_natively() {
     assert!(stderr.contains("live sockets: 0"), "{stderr}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn header_values(head: &str, name: &str) -> Vec<String> {
+    head.lines()
+        .skip(1)
+        .filter_map(|line| {
+            let (n, v) = line.split_once(':')?;
+            if n.trim().eq_ignore_ascii_case(name) {
+                Some(v.trim().to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn cookie_pair(set_cookie: &str) -> String {
+    set_cookie
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn web_cookie_api_natively() {
+    let dir = temp_dir("web-cookie-api");
+    let src = r#"use std::web;
+use std::http;
+
+fn make(headers: string) -> http::HttpRequest {
+    return http::HttpRequest { method: "GET", target: "/", version: "HTTP/1.1", headers: headers, body: "" };
+}
+
+fn options(path: string, max_age: int, same_site: string, http_only: bool, insecure: bool) -> web::CookieOptions {
+    return web::CookieOptions {
+        path: path,
+        max_age: max_age,
+        same_site: same_site,
+        http_only: http_only,
+        insecure_http: insecure
+    };
+}
+
+fn get_case(cookies: web::Cookies, name: string) -> void {
+    match web::cookie_get(cookies, name) {
+        Result::Ok(v) => println("G|" + name + "|ok|" + v + "|"),
+        Result::Err(e) => println("G|" + name + "|err|" + e + "|")
+    };
+}
+
+fn first_case(cookies: web::Cookies, name: string) -> void {
+    match web::cookie_first(cookies, name) {
+        Option::Some(v) => println("F|" + name + "|some|" + v + "|"),
+        Option::None => println("F|" + name + "|none||")
+    };
+}
+
+fn inspect(cookies: web::Cookies, label: string) -> void {
+    println("P|" + label + "|count=" + str(web::cookie_count(cookies)) + "|names=" + join(web::cookie_names(cookies), ","));
+    get_case(cookies, "a");
+    get_case(cookies, "b");
+    first_case(cookies, "a");
+    println("H|a|" + str(web::cookie_has(cookies, "a")) + "|");
+}
+
+fn parse(headers: string, label: string) -> void {
+    match web::cookies(make(headers)) {
+        Result::Ok(cookies) => inspect(cookies, label),
+        Result::Err(e) => println("ERR|" + e)
+    };
+}
+
+fn many_cookies() -> string {
+    var s = "Cookie:";
+    var i = 0;
+    while i < 70 {
+        s = s + " c" + str(i) + "=" + str(i) + ";";
+        i = i + 1;
+    }
+    return s;
+}
+
+fn set_case(name: string, value: string, opts: web::CookieOptions, label: string) -> void {
+    match web::set_cookie(name, value, opts) {
+        Result::Ok(line) => println("S|" + label + "|" + line),
+        Result::Err(e) => println("E|" + label + "|" + e)
+    };
+}
+
+fn delete_case(name: string, path: string, insecure: bool) -> void {
+    match web::delete_cookie(name, path, insecure) {
+        Result::Ok(line) => println("D|" + line),
+        Result::Err(e) => println("DE|" + e)
+    };
+}
+
+fn two_lines() -> void {
+    match web::set_cookie("a", "1", options("/", 0, "Lax", true, false)) {
+        Result::Ok(l1) => with_second(l1),
+        Result::Err(e) => println("E|two|" + e)
+    };
+}
+
+fn with_second(first: string) -> void {
+    match web::set_cookie("b", "2", options("/x", 0, "Strict", false, true)) {
+        Result::Ok(second) => join_lines(first, second),
+        Result::Err(e) => println("E|two|" + e)
+    };
+}
+
+fn join_lines(first: string, second: string) -> void {
+    let lines = [first, second];
+    match web::cookie_headers(lines) {
+        Result::Ok(block) => println("B|len=" + str(len(block)) + "|has_crlf=" + str(contains(block, "\r\n"))),
+        Result::Err(e) => println("BE|" + e)
+    };
+    let bad = ["Set-Cookie: a=1\r\nX: y"];
+    match web::cookie_headers(bad) {
+        Result::Ok(block) => println("BAD|accepted"),
+        Result::Err(e) => println("BAD|" + e)
+    };
+    let wrong = ["X-Test: 1"];
+    match web::cookie_headers(wrong) {
+        Result::Ok(block) => println("WRONG|accepted"),
+        Result::Err(e) => println("WRONG|" + e)
+    };
+}
+
+fn main() -> int {
+    parse("", "empty");
+    parse("Cookie: a=1; b=2", "simple");
+    parse("Cookie: a=1; a=2", "duplicate");
+    parse("Cookie: bad name=1; ok=2", "badname");
+    parse("Cookie: a=%20; b=ok", "percent");
+    parse("Cookie: b=2\r\nCookie: c=3", "multiheader");
+    parse("Cookie: a=1; ; ;b=2;", "empties");
+    parse("Cookie: =v; a=1", "emptyname");
+    parse("Cookie: a=", "emptyvalue");
+    parse("Cookie: x=\"q\"", "quoted");
+    parse(many_cookies(), "many");
+
+    set_case("sid", "abc", options("/", 3600, "Lax", true, false), "full");
+    set_case("sid", "abc", options("/app", 0, "Strict", false, false), "strict");
+    set_case("sid", "abc", options("", 0, "", false, false), "minimal");
+    set_case("sid", "abc", options("/", 0, "None", true, false), "none");
+    set_case("sid", "abc", options("/", 0, "None", true, true), "none-insecure");
+    set_case("bad name", "v", options("", 0, "Lax", true, false), "badname");
+    set_case("n", "a;b", options("", 0, "Lax", true, false), "badvalue");
+    set_case("n", "v", options("no-slash", 0, "Lax", true, false), "badpath");
+    set_case("n", "v", options("/", -1, "Lax", true, false), "badage");
+    set_case("n", "v", options("/", 0, "weird", true, false), "badsamesite");
+    set_case("a\r\nX: y", "v", options("", 0, "Lax", true, false), "injectname");
+    set_case("v", "a\r\nX: y", options("", 0, "Lax", true, false), "injectvalue");
+    delete_case("sid", "/", false);
+    delete_case("sid", "/app", true);
+    two_lines();
+    return 0;
+}
+"#;
+    let file = dir.join("main.blm");
+    write_file(&file, src);
+    let out = run_bloom_env(
+        &["run", file.to_string_lossy().as_ref()],
+        &[("BLOOM_MEM_REPORT", "1")],
+    );
+    if no_toolchain(&out) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(out.code, 0, "{}", out.combined());
+    let stdout = norm(&out.stdout);
+
+    // Cookie parsing
+    assert!(stdout.contains("P|empty|count=0|names=\n"), "{stdout}");
+    assert!(stdout.contains("P|simple|count=2|names=a,b\n"), "{stdout}");
+    assert!(stdout.contains("G|a|ok|1|\n"), "{stdout}");
+    assert!(stdout.contains("P|duplicate|count=2|names=a\n"), "{stdout}");
+    assert!(
+        stdout.contains("G|a|err|cookie_get: cookie has multiple values|\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("F|a|some|1|\n"), "{stdout}");
+    assert!(stdout.contains("P|badname|count=1|names=ok\n"), "{stdout}");
+    assert!(stdout.contains("P|percent|count=2|names=a,b\n"), "{stdout}");
+    assert!(
+        stdout.contains("G|a|ok|%20|\n"),
+        "values stay verbatim: {stdout}"
+    );
+    assert!(
+        stdout.contains("P|multiheader|count=2|names=b,c\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("P|empties|count=2|names=a,b\n"), "{stdout}");
+    assert!(stdout.contains("P|emptyname|count=1|names=a\n"), "{stdout}");
+    assert!(
+        stdout.contains("G|a|ok||\n"),
+        "empty value is preserved: {stdout}"
+    );
+    assert!(stdout.contains("P|quoted|count=0|names=\n"), "{stdout}");
+    assert!(stdout.contains("P|many|count=64|"), "{stdout}");
+
+    // Set-Cookie generation
+    assert!(
+        stdout.contains(
+            "S|full|Set-Cookie: sid=abc; Path=/; Max-Age=3600; HttpOnly; Secure; SameSite=Lax\n"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("S|strict|Set-Cookie: sid=abc; Path=/app; Secure; SameSite=Strict\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("S|minimal|Set-Cookie: sid=abc; Secure\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("S|none|Set-Cookie: sid=abc; Path=/; HttpOnly; Secure; SameSite=None\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("E|none-insecure|set_cookie: SameSite=None requires Secure"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("E|badname|set_cookie: invalid cookie name"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("E|badvalue|set_cookie: invalid cookie value"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("E|badpath|set_cookie: invalid cookie path"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("E|badage|set_cookie: cookie Max-Age out of range"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("E|badsamesite|set_cookie: invalid SameSite value"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("E|injectname|set_cookie: invalid cookie name"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("E|injectvalue|set_cookie: invalid cookie value"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("D|Set-Cookie: sid=; Path=/; HttpOnly; Secure; SameSite=Lax\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("D|Set-Cookie: sid=; Path=/app; HttpOnly; SameSite=Lax\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("B|len="), "{stdout}");
+    assert!(stdout.contains("|has_crlf=true\n"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "BAD|cookie_headers: cookie header line must not contain CR, LF or control bytes"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("WRONG|cookie_headers: expected `Set-Cookie: ...` lines"),
+        "{stdout}"
+    );
+    assert!(
+        out.stderr.contains("live allocations: 0"),
+        "{}",
+        out.combined()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn web_session_api_natively() {
+    let dir = temp_dir("web-session-api");
+    let src = r#"use std::web;
+use std::http;
+use std::json;
+use std::time;
+
+fn make(headers: string) -> http::HttpRequest {
+    return http::HttpRequest { method: "GET", target: "/", version: "HTTP/1.1", headers: headers, body: "" };
+}
+
+fn store_case(max: int, ttl: int, label: string) -> void {
+    match web::session_store(max, ttl) {
+        Result::Ok(s) => println("ST|" + label + "|ok"),
+        Result::Err(e) => println("ST|" + label + "|" + e)
+    };
+}
+
+fn load(store: web::SessionStore, header: string) -> string {
+    return match web::cookies(make(header)) {
+        Result::Ok(c) => load_cookies(store, c),
+        Result::Err(e) => "cookies-error"
+    };
+}
+
+fn load_cookies(store: web::SessionStore, c: web::Cookies) -> string {
+    return match web::session_load(store, c, "sid") {
+        Result::Ok(s) => "ok:" + web::session_id(s),
+        Result::Err(e) => "err:" + e
+    };
+}
+
+fn resume(store: web::SessionStore, header: string, label: string) -> Result<int, string> {
+    return match web::cookies(make(header)) {
+        Result::Ok(c) => resume_cookies(store, c, label),
+        Result::Err(e) => resume_failed(label)
+    };
+}
+
+fn resume_failed(label: string) -> Result<int, string> {
+    println(label + "=cookies-error");
+    return Result::Ok(1);
+}
+
+fn resume_cookies(store: web::SessionStore, c: web::Cookies, label: string) -> Result<int, string> {
+    return match web::session_load(store, c, "sid") {
+        Result::Ok(s) => share(store, s, label),
+        Result::Err(e) => resume_load_failed(label, e)
+    };
+}
+
+fn resume_load_failed(label: string, e: string) -> Result<int, string> {
+    println(label + "=err:" + e);
+    return Result::Ok(1);
+}
+
+fn share(store: web::SessionStore, s: web::Session, label: string) -> Result<int, string> {
+    json::set(web::session_data(s), "shared", json::make_int(7))?;
+    println(label + "|shared-visible");
+    return Result::Ok(0);
+}
+
+fn csrf_cases(session: web::Session, other: web::Session) -> void {
+    match web::csrf_token(session) {
+        Result::Ok(token) => csrf_run(session, other, token),
+        Result::Err(e) => println("CSRF|token-err|" + e)
+    };
+}
+
+fn csrf_run(session: web::Session, other: web::Session, token: string) -> void {
+    println("CSRF|len=" + str(len(token)));
+    println("CSRF|stable=" + str(token_stable(session, token)));
+    println("CSRF|ok=" + str(web::csrf_check(session, token)));
+    println("CSRF|bad=" + str(web::csrf_check(session, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")));
+    println("CSRF|short=" + str(web::csrf_check(session, "kurz")));
+    let other_token = match web::csrf_token(other) {
+        Result::Ok(v) => v,
+        Result::Err(e) => ""
+    };
+    println("CSRF|cross=" + str(web::csrf_check(other, token)));
+    println("CSRF|other=" + str(web::csrf_check(other, other_token)));
+    match web::csrf_rotate(other) {
+        Result::Ok(fresh) => println("CSRF|rotated=" + str(fresh != other_token)),
+        Result::Err(e) => println("CSRF|rotate-err|" + e)
+    };
+}
+
+fn token_stable(session: web::Session, token: string) -> bool {
+    return match web::csrf_token(session) {
+        Result::Ok(v) => v == token,
+        Result::Err(e) => false
+    };
+}
+
+fn run() -> Result<int, string> {
+    store_case(0, 60, "zero");
+    store_case(2, 0, "zerottl");
+    store_case(65536, 60, "toomany");
+    store_case(1, 31536001, "ttl");
+
+    let store = web::session_store(8, 60)?;
+    let s1 = web::session_new(store)?;
+    let s2 = web::session_new(store)?;
+    let id1 = web::session_id(s1);
+    let id2 = web::session_id(s2);
+    println("ids|len=" + str(len(id1)) + "|diff=" + str(id1 != id2));
+    println("count=" + str(web::session_count(store)));
+
+    json::set(web::session_data(s1), "user", json::make_string("ada"))?;
+    json::set(web::session_data(s1), "n", json::make_int(1))?;
+    println("user=" + json::get_string(web::session_data(s1), "user")?);
+    println("n1=" + str(json::get_int(web::session_data(s1), "n")?));
+    json::set(web::session_data(s1), "n", json::make_int(2))?;
+    println("n2=" + str(json::get_int(web::session_data(s1), "n")?));
+    match json::get_string(web::session_data(s1), "missing") {
+        Result::Ok(v) => println("missing=UNEXPECTED"),
+        Result::Err(e) => println("missing=err")
+    };
+    json::set(web::session_data(s1), "nil", json::null())?;
+    match json::get_string(web::session_data(s1), "nil") {
+        Result::Ok(v) => println("nil=UNEXPECTED"),
+        Result::Err(e) => println("nil=err")
+    };
+
+    println("load-match=" + str(load(store, "Cookie: sid=" + id1) == "ok:" + id1));
+    println("load-unknown=" + load(store, "Cookie: sid=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
+    println("load-malformed=" + load(store, "Cookie: sid=kaputt"));
+    println("load-missing=" + load(store, ""));
+    println("load-duplicate=" + load(store, "Cookie: sid=" + id1 + "; sid=" + id1));
+
+    resume(store, "Cookie: sid=" + id1, "resume")?;
+    println("shared=" + str(json::get_int(web::session_data(s1), "shared")?));
+
+    match web::session_cookie(s2, "sid", 600) {
+        Result::Ok(line) => println("cookie|" + line),
+        Result::Err(e) => println("cookie-err|" + e)
+    };
+    match web::session_cookie_insecure(s2, "sid", 600) {
+        Result::Ok(line) => println("insecure|" + line),
+        Result::Err(e) => println("cookie-err|" + e)
+    };
+    match web::session_cookie(s2, "bad name", 600) {
+        Result::Ok(line) => println("cookie-badname|accepted"),
+        Result::Err(e) => println("cookie-badname|" + e)
+    };
+    match web::session_cookie(s2, "sid", 0) {
+        Result::Ok(line) => println("cookie-badage|accepted"),
+        Result::Err(e) => println("cookie-badage|" + e)
+    };
+
+    csrf_cases(s1, s2);
+    println("destroy=" + str(web::session_destroy(store, s1)));
+    println("destroy-again=" + str(web::session_destroy(store, s1)));
+    println("handle-after-destroy=" + json::get_string(web::session_data(s1), "user")?);
+    println("load-after-destroy=" + load(store, "Cookie: sid=" + id1));
+
+    let cap = web::session_store(2, 60)?;
+    let a = web::session_new(cap)?;
+    let b = web::session_new(cap)?;
+    match web::session_new(cap) {
+        Result::Ok(c) => println("full=UNEXPECTED"),
+        Result::Err(e) => println("full|" + e)
+    };
+    println("cap-destroy=" + str(web::session_destroy(cap, a)));
+    let c = web::session_new(cap)?;
+    println("cap-count=" + str(web::session_count(cap)));
+
+    let exp = web::session_store(4, 1)?;
+    let e = web::session_new(exp)?;
+    let eid = web::session_id(e);
+    time::sleep_ms(1200);
+    println("expire=" + str(web::session_expire(exp)));
+    println("expire-again=" + str(web::session_expire(exp)));
+    println("expired-load=" + load(exp, "Cookie: sid=" + eid));
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => 1
+    };
+}
+"#;
+    let file = dir.join("main.blm");
+    write_file(&file, src);
+    let out = run_bloom_env(
+        &["run", file.to_string_lossy().as_ref()],
+        &[("BLOOM_MEM_REPORT", "1")],
+    );
+    if no_toolchain(&out) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(out.code, 0, "{}", out.combined());
+    let stdout = norm(&out.stdout);
+
+    assert!(
+        stdout.contains("ST|zero|session_store: max_sessions out of range"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ST|zerottl|session_store: ttl_seconds out of range"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ST|toomany|session_store: max_sessions out of range"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ST|ttl|session_store: ttl_seconds out of range"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("ids|len=43|diff=true\n"), "{stdout}");
+    assert!(stdout.contains("count=2\n"), "{stdout}");
+    assert!(stdout.contains("user=ada\nn1=1\nn2=2\n"), "{stdout}");
+    assert!(stdout.contains("missing=err\nnil=err\n"), "{stdout}");
+    assert!(stdout.contains("load-match=true\n"), "{stdout}");
+    assert!(
+        stdout.contains("load-unknown=err:session_load: unknown or expired session"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("load-malformed=err:session_load: malformed session id"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("load-missing=err:session_load: session cookie not found"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "load-duplicate=err:session_load: session cookie is ambiguous (duplicate cookie name)"
+        ),
+        "{stdout}"
+    );
+    assert!(stdout.contains("resume|shared-visible\n"), "{stdout}");
+    assert!(stdout.contains("shared=7\n"), "{stdout}");
+    assert!(
+        stdout.contains("cookie|Set-Cookie: sid=")
+            && stdout.contains("; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Lax\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("insecure|Set-Cookie: sid=")
+            && stdout.contains("; Path=/; Max-Age=600; HttpOnly; SameSite=Lax\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("cookie-badname|session_cookie: invalid cookie name"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("cookie-badage|session_cookie: Max-Age out of range (1..31536000 seconds)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("CSRF|len=43\n"), "{stdout}");
+    assert!(
+        stdout.contains("CSRF|stable=true\nCSRF|ok=true\nCSRF|bad=false\nCSRF|short=false\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("CSRF|cross=false\nCSRF|other=true\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("CSRF|rotated=true\n"), "{stdout}");
+    assert!(
+        stdout.contains("destroy=true\ndestroy-again=false\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("handle-after-destroy=ada\n"), "{stdout}");
+    assert!(
+        stdout.contains("load-after-destroy=err:session_load: unknown or expired session"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("full|session_new: session store is full (no expired sessions)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("cap-count=2\n"), "{stdout}");
+    assert!(stdout.contains("expire=1\nexpire-again=0\n"), "{stdout}");
+    assert!(
+        stdout.contains("expired-load=err:session_load: unknown or expired session"),
+        "{stdout}"
+    );
+    assert!(
+        out.stderr.contains("live allocations: 0"),
+        "{}",
+        out.combined()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn web_session_random_failure_natively() {
+    let dir = temp_dir("web-session-random-fail");
+    let src = r#"use std::web;
+
+fn try_new(store: web::SessionStore) -> void {
+    match web::session_new(store) {
+        Result::Ok(s) => println("UNEXPECTED"),
+        Result::Err(e) => println("ERR|" + e)
+    };
+}
+
+fn main() -> int {
+    match web::session_store(2, 60) {
+        Result::Ok(store) => try_new(store),
+        Result::Err(e) => println("store-err")
+    };
+    return 0;
+}
+"#;
+    let file = dir.join("main.blm");
+    write_file(&file, src);
+    let out = run_bloom_env(
+        &["run", file.to_string_lossy().as_ref()],
+        &[
+            ("BLOOM_MEM_REPORT", "1"),
+            ("BLOOM_WEB_TEST_FAIL_RANDOM", "1"),
+        ],
+    );
+    if no_toolchain(&out) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(out.code, 0, "{}", out.combined());
+    let stdout = norm(&out.stdout);
+    assert!(
+        stdout.contains("ERR|session_new: secure random source unavailable"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("UNEXPECTED"), "{stdout}");
+    assert!(
+        out.stderr.contains("live allocations: 0"),
+        "{}",
+        out.combined()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn web_cookies_e2e() {
+    use std::io::Read;
+
+    let dir = temp_dir("web-cookies-e2e");
+    let (mut child, port, mut reader) =
+        match spawn_example_server(&dir, "web_cookies.blm", "web_cookies") {
+            Some(v) => v,
+            None => return,
+        };
+
+    // raw_request cannot add a Cookie header, so send it explicitly below.
+    fn with_cookie(port: u16, cookie: &str) -> Vec<u8> {
+        use std::io::Write;
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        let raw = format!(
+            "GET / HTTP/1.1\r\nHost: bloom\r\nCookie: {cookie}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        stream.write_all(raw.as_bytes()).expect("write");
+        let mut response = Vec::new();
+        use std::io::Read;
+        stream.read_to_end(&mut response).expect("read");
+        response
+    }
+
+    let r1 = with_cookie(port, "lang=de; theme=dark");
+    let (head1, body1) = split_http_response(&r1);
+    let text1 = String::from_utf8_lossy(&body1);
+    assert!(head1.starts_with("HTTP/1.1 200 OK\r\n"), "{head1}");
+    assert!(text1.contains("lang: de"), "{text1}");
+    assert!(text1.contains("theme: dark"), "{text1}");
+    assert!(text1.contains("Namen: lang, theme"), "{text1}");
+    let set1 = header_values(&head1, "set-cookie");
+    assert_eq!(set1.len(), 1, "{head1}");
+    assert!(set1[0].starts_with("last=gesehen"), "{set1:?}");
+    assert!(set1[0].contains("HttpOnly"), "{set1:?}");
+    assert!(set1[0].contains("SameSite=Lax"), "{set1:?}");
+    assert!(
+        !set1[0].contains("Secure"),
+        "dev example omits Secure: {set1:?}"
+    );
+
+    let r2 = with_cookie(port, "last=gesehen");
+    let (_, body2) = split_http_response(&r2);
+    assert!(String::from_utf8_lossy(&body2).contains("Namen: last"));
+
+    let r3 = raw_request(port, "GET", "/", None, b"");
+    let (_, body3) = split_http_response(&r3);
+    assert!(String::from_utf8_lossy(&body3).contains("Namen: (keine)"));
+
+    let r4 = with_cookie(port, "a=1; a=2");
+    let (_, body4) = split_http_response(&r4);
+    assert!(String::from_utf8_lossy(&body4).contains("Namen: a"));
+
+    let r5 = raw_request(port, "GET", "/", None, b"");
+    assert!(split_http_response(&r5).0.starts_with("HTTP/1.1 200 "));
+    let r6 = raw_request(port, "GET", "/", None, b"");
+    assert!(split_http_response(&r6).0.starts_with("HTTP/1.1 200 "));
+
+    let status = child.wait().expect("wait");
+    let mut rest = String::new();
+    reader.read_to_string(&mut rest).expect("rest");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("stderr read");
+    assert_eq!(status.code(), Some(0), "{rest}\n{stderr}");
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    assert!(stderr.contains("live sockets: 0"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn web_session_basic_e2e() {
+    use std::io::Read;
+
+    let dir = temp_dir("web-session-basic-e2e");
+    let (mut child, port, mut reader) =
+        match spawn_example_server(&dir, "web_session_basic.blm", "web_session_basic") {
+            Some(v) => v,
+            None => return,
+        };
+
+    fn get(port: u16, cookie: Option<&str>) -> Vec<u8> {
+        use std::io::Write;
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        let mut raw = String::from(
+            "GET / HTTP/1.1\r\nHost: bloom\r\nContent-Length: 0\r\nConnection: close\r\n",
+        );
+        if let Some(c) = cookie {
+            raw.push_str(&format!("Cookie: {c}\r\n"));
+        }
+        raw.push_str("\r\n");
+        stream.write_all(raw.as_bytes()).expect("write");
+        let mut response = Vec::new();
+        use std::io::Read;
+        stream.read_to_end(&mut response).expect("read");
+        response
+    }
+
+    let r1 = get(port, None);
+    let (head1, body1) = split_http_response(&r1);
+    let text1 = String::from_utf8_lossy(&body1);
+    assert!(head1.starts_with("HTTP/1.1 200 OK\r\n"), "{head1}");
+    assert!(text1.contains("Besuche: 1"), "{text1}");
+    assert!(text1.contains("Wiederaufgenommen: nein"), "{text1}");
+    let set1 = header_values(&head1, "set-cookie");
+    assert_eq!(set1.len(), 1, "{head1}");
+    let pair = cookie_pair(&set1[0]);
+    assert!(pair.starts_with("sid="), "{pair}");
+    assert_eq!(pair.len(), 4 + 43, "{pair}");
+    assert!(set1[0].contains("Path=/"), "{set1:?}");
+    assert!(set1[0].contains("Max-Age=600"), "{set1:?}");
+    assert!(set1[0].contains("HttpOnly"), "{set1:?}");
+    assert!(
+        !set1[0].contains("Secure"),
+        "dev example omits Secure: {set1:?}"
+    );
+    let id = pair.trim_start_matches("sid=").to_string();
+
+    let r2 = get(port, Some(&pair));
+    let (_, body2) = split_http_response(&r2);
+    let text2 = String::from_utf8_lossy(&body2);
+    assert!(text2.contains("Besuche: 2"), "{text2}");
+    assert!(text2.contains("Wiederaufgenommen: ja"), "{text2}");
+    assert!(text2.contains(&id), "{text2}");
+
+    let r3 = get(port, Some(&pair));
+    let (_, body3) = split_http_response(&r3);
+    let text3 = String::from_utf8_lossy(&body3);
+    assert!(text3.contains("Besuche: 3"), "{text3}");
+    assert!(text3.contains("Wiederaufgenommen: ja"), "{text3}");
+
+    let unknown = format!("sid={}", "A".repeat(43));
+    let r4 = get(port, Some(&unknown));
+    let (_, body4) = split_http_response(&r4);
+    let text4 = String::from_utf8_lossy(&body4);
+    assert!(text4.contains("Besuche: 1"), "{text4}");
+    assert!(text4.contains("Wiederaufgenommen: nein"), "{text4}");
+
+    let r5 = get(port, None);
+    let (_, body5) = split_http_response(&r5);
+    assert!(String::from_utf8_lossy(&body5).contains("Wiederaufgenommen: nein"));
+
+    let r6 = get(port, Some("sid=kurz"));
+    let (_, body6) = split_http_response(&r6);
+    assert!(String::from_utf8_lossy(&body6).contains("Besuche: 1"));
+
+    let status = child.wait().expect("wait");
+    let mut rest = String::new();
+    reader.read_to_string(&mut rest).expect("rest");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("stderr read");
+    assert_eq!(status.code(), Some(0), "{rest}\n{stderr}");
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    assert!(stderr.contains("live sockets: 0"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn web_session_expiry_e2e() {
+    use std::io::Read;
+
+    let dir = temp_dir("web-session-expiry-e2e");
+    let (mut child, port, mut reader) =
+        match spawn_example_server(&dir, "web_session_expiry.blm", "web_session_expiry") {
+            Some(v) => v,
+            None => return,
+        };
+
+    fn get(port: u16, cookie: Option<&str>) -> Vec<u8> {
+        use std::io::Write;
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        let mut raw = String::from(
+            "GET / HTTP/1.1\r\nHost: bloom\r\nContent-Length: 0\r\nConnection: close\r\n",
+        );
+        if let Some(c) = cookie {
+            raw.push_str(&format!("Cookie: {c}\r\n"));
+        }
+        raw.push_str("\r\n");
+        stream.write_all(raw.as_bytes()).expect("write");
+        let mut response = Vec::new();
+        use std::io::Read;
+        stream.read_to_end(&mut response).expect("read");
+        response
+    }
+
+    let r1 = get(port, None);
+    let (head1, body1) = split_http_response(&r1);
+    assert!(String::from_utf8_lossy(&body1).contains("Zustand: neu"));
+    let pair = cookie_pair(&header_values(&head1, "set-cookie")[0]);
+    assert!(pair.starts_with("sid="), "{pair}");
+
+    let r2 = get(port, Some(&pair));
+    let (_, body2) = split_http_response(&r2);
+    assert!(String::from_utf8_lossy(&body2).contains("Zustand: wiederverwendet"));
+
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+
+    let r3 = get(port, Some(&pair));
+    let (_, body3) = split_http_response(&r3);
+    assert!(
+        String::from_utf8_lossy(&body3).contains("Zustand: neu"),
+        "expired session must not resume: {}",
+        String::from_utf8_lossy(&body3)
+    );
+
+    let r4 = get(port, None);
+    assert!(String::from_utf8_lossy(&split_http_response(&r4).1).contains("Zustand: neu"));
+
+    let status = child.wait().expect("wait");
+    let mut rest = String::new();
+    reader.read_to_string(&mut rest).expect("rest");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("stderr read");
+    assert_eq!(status.code(), Some(0), "{rest}\n{stderr}");
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    assert!(stderr.contains("live sockets: 0"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn web_session_errors_e2e() {
+    use std::io::Read;
+
+    let dir = temp_dir("web-session-errors-e2e");
+    let (mut child, port, mut reader) =
+        match spawn_example_server(&dir, "web_session_errors.blm", "web_session_errors") {
+            Some(v) => v,
+            None => return,
+        };
+
+    let r1 = raw_request(port, "GET", "/new", None, b"");
+    let (head1, body1) = split_http_response(&r1);
+    assert!(head1.starts_with("HTTP/1.1 200 OK\r\n"), "{head1}");
+    let text1 = String::from_utf8_lossy(&body1).to_string();
+    assert!(text1.starts_with("ok:"), "{text1}");
+    let id = text1.trim_start_matches("ok:").to_string();
+    assert_eq!(id.len(), 43, "{id}");
+
+    let r2 = raw_request(port, "GET", "/new", None, b"");
+    let (head2, body2) = split_http_response(&r2);
+    assert!(
+        head2.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+        "{head2}"
+    );
+    assert!(
+        String::from_utf8_lossy(&body2).contains("session store is full"),
+        "{head2}"
+    );
+
+    let r3 = raw_request(port, "GET", "/load", None, b"");
+    let (head3, body3) = split_http_response(&r3);
+    assert!(head3.starts_with("HTTP/1.1 403 "), "{head3}");
+    assert!(
+        String::from_utf8_lossy(&body3).contains("session cookie not found"),
+        "{head3}"
+    );
+
+    let with_cookie = |method: &str,
+                       target: &str,
+                       cookie: &str,
+                       ct: Option<&str>,
+                       body: &[u8]|
+     -> Vec<u8> {
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        let mut raw = format!(
+            "{method} {target} HTTP/1.1\r\nHost: bloom\r\nCookie: {cookie}\r\nContent-Length: {}\r\nConnection: close\r\n",
+            body.len()
+        );
+        if let Some(c) = ct {
+            raw.push_str(&format!("Content-Type: {c}\r\n"));
+        }
+        raw.push_str("\r\n");
+        stream.write_all(raw.as_bytes()).expect("write head");
+        stream.write_all(body).expect("write body");
+        let mut response = Vec::new();
+        use std::io::Read;
+        stream.read_to_end(&mut response).expect("read");
+        response
+    };
+
+    let r4 = with_cookie("GET", "/load", "sid=kaputt", None, b"");
+    let (head4, body4) = split_http_response(&r4);
+    assert!(head4.starts_with("HTTP/1.1 403 "), "{head4}");
+    assert!(
+        String::from_utf8_lossy(&body4).contains("malformed session id"),
+        "{head4}"
+    );
+
+    let r5 = with_cookie("GET", "/load", &format!("sid={id}"), None, b"");
+    let (head5, body5) = split_http_response(&r5);
+    assert!(head5.starts_with("HTTP/1.1 200 OK\r\n"), "{head5}");
+    assert_eq!(
+        String::from_utf8_lossy(&body5).to_string(),
+        format!("loaded:{id}")
+    );
+
+    let r6 = with_cookie(
+        "POST",
+        "/check",
+        &format!("sid={id}"),
+        Some("application/x-www-form-urlencoded"),
+        format!("csrf={}", "A".repeat(43)).as_bytes(),
+    );
+    let (head6, body6) = split_http_response(&r6);
+    assert!(head6.starts_with("HTTP/1.1 403 "), "{head6}");
+    assert_eq!(String::from_utf8_lossy(&body6).to_string(), "csrf:invalid");
+
+    let status = child.wait().expect("wait");
+    let mut rest = String::new();
+    reader.read_to_string(&mut rest).expect("rest");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("stderr read");
+    assert_eq!(status.code(), Some(0), "{rest}\n{stderr}");
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    assert!(stderr.contains("live sockets: 0"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn web_csrf_form_e2e() {
+    use std::io::Read;
+
+    let dir = temp_dir("web-csrf-e2e");
+    let (mut child, port, mut reader) =
+        match spawn_example_server(&dir, "web_csrf_form.blm", "web_csrf_form") {
+            Some(v) => v,
+            None => return,
+        };
+
+    let client = dir.join("client.blm");
+    write_file(
+        &client,
+        r#"use std::http;
+
+fn cookie_of(r: http::HttpResponse) -> string {
+    return match http::header_get(r.headers, "set-cookie") {
+        Option::Some(line) => trim(split(line, ";")[0]),
+        Option::None => ""
+    };
+}
+
+fn token_of(body: string) -> string {
+    let parts = split(body, "name=\"csrf\" value=\"");
+    if len(parts) < 2 {
+        return "";
+    }
+    return split(parts[1], "\"")[0];
+}
+
+fn post(url: string, cookie: string, token: string) -> Result<http::HttpResponse, string> {
+    let body = "csrf=" + token + "&note=Hallo";
+    var headers = "Content-Type: application/x-www-form-urlencoded";
+    if len(cookie) > 0 {
+        headers = "Cookie: " + cookie + "\r\n" + headers;
+    }
+    return http::request("POST", url, headers, body);
+}
+
+fn run() -> Result<int, string> {
+    let port = trim(input(""));
+    let base = "http://127.0.0.1:" + port;
+
+    let first = http::get(base + "/")?;
+    let cookie = cookie_of(first);
+    let token = token_of(first.body);
+    println("GET1=" + str(first.status) + " cookie=" + cookie + " tokenlen=" + str(len(token)));
+
+    let good = post(base + "/save", cookie, token)?;
+    println("POST1=" + str(good.status) + " ok=" + str(contains(good.body, "Zaehler: 1")));
+
+    let bad = post(base + "/save", cookie, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")?;
+    println("POST2=" + str(bad.status));
+
+    let anon = post(base + "/save", "", token)?;
+    println("POST3=" + str(anon.status));
+
+    let again = http::request("GET", base + "/", "Cookie: " + cookie, "")?;
+    println("GET2=" + str(again.status) + " count=" + str(contains(again.body, "Zaehler: 1")));
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}
+"#,
+    );
+    let client_out = run_bloom_stdin_env(
+        &["run", client.to_string_lossy().as_ref()],
+        &format!("{port}\n"),
+        &[("BLOOM_MEM_REPORT", "1")],
+    );
+    assert_eq!(client_out.code, 0, "{}", client_out.combined());
+    let client_stdout = norm(&client_out.stdout);
+    assert!(
+        client_stdout.contains("GET1=200 cookie=sid="),
+        "{client_stdout}"
+    );
+    assert!(client_stdout.contains(" tokenlen=43\n"), "{client_stdout}");
+    assert!(
+        client_stdout.contains("POST1=200 ok=true\n"),
+        "{client_stdout}"
+    );
+    assert!(client_stdout.contains("POST2=403\n"), "{client_stdout}");
+    assert!(client_stdout.contains("POST3=403\n"), "{client_stdout}");
+    assert!(
+        client_stdout.contains("GET2=200 count=true\n"),
+        "{client_stdout}"
+    );
+    assert!(
+        client_out.stderr.contains("live allocations: 0"),
+        "{}",
+        client_out.combined()
+    );
+
+    let status = child.wait().expect("wait");
+    let mut rest = String::new();
+    reader.read_to_string(&mut rest).expect("rest");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("stderr read");
+    assert_eq!(status.code(), Some(0), "{rest}\n{stderr}");
+    let log = norm(&rest);
+    assert_eq!(log.matches("Fehler gesendet: 403").count(), 2, "{log}");
+    assert!(log.contains("Ergebnis gesendet"), "{log}");
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    assert!(stderr.contains("live sockets: 0"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

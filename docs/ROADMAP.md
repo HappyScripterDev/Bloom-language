@@ -419,10 +419,54 @@ Vertagt (weiterhin geplant):
 
 Vertagt (weiterhin geplant):
 
-- Multipart-Formulare und Datei-Uploads, Sessions, CSRF-Tokens,
-  automatische Formularvalidierung
+- Multipart-Formulare und Datei-Uploads, automatische
+  Formularvalidierung (Sessions und CSRF-Token kamen in 0.17)
 - Streaming/Range-Requests, ETag/Last-Modified, Verzeichnis-Indizes,
   automatisches Neuladen von Dateien
+- Template-Includes, Makros, ausführbare Ausdrücke, Raw-HTML
+- GUI-Anbindung (aufbauend auf `std::win32`)
+- WebSocket, JSON-Streaming, Datenbankabstraktion
+
+## Version 0.17.0 – Cookies, Sessions und CSRF (implementiert)
+
+- **Cookies lesen:** `cookies(request)` liest alle `Cookie`-Header;
+  `cookie_count`, `cookie_has`, `cookie_get` (genau ein Wert),
+  `cookie_first`, `cookie_names`. Werte bleiben wörtlich (keine
+  Prozentdekodierung, kein Unquoting), ungültige Paare werden
+  ignoriert, doppelte Namen sind mehrdeutig (`cookie_get` → `Err`).
+  Limits: 64 Cookies, Name 64 Bytes, Wert 4096 Bytes
+- **`Set-Cookie` erzeugen:** strukturierte `CookieOptions`
+  (`path`, `max_age`, `same_site`, `http_only`, `insecure_http`);
+  `set_cookie`/`delete_cookie` prüfen Namen, Wert, Pfad und Attribute,
+  lehnen CR/LF und ungültige SameSite-Werte ab; `Secure` ist Standard,
+  `SameSite=None` verlangt `Secure`; kein Domain-Scope; mehrere Zeilen
+  über `cookie_headers` bzw. getrennte Header bleiben getrennt
+- **Sessions:** In-Memory-Store mit Kapazität (1..65535) und absoluter
+  TTL (1..31536000 s), monotone Uhr; `session_new` erzeugt
+  32-Zufallsbytes-IDs (Base64url, 43 Zeichen) über `BCryptGenRandom`
+  bzw. `/dev/urandom`; `session_load` lehnt fehlende, doppelte,
+  malformed, unbekannte und abgelaufene IDs ab; `session_data` liefert
+  das gemeinsame JSON-Objekt; `session_destroy`, `session_expire`,
+  `session_count`; volle Stores lehnen neue Sessions ab; keine
+  Verdrängung, kein Persistieren, keine Verteilung
+- **CSRF:** `csrf_token` (32 Zufallsbytes, 43 Zeichen, pro Session),
+  `csrf_check` (konstantzeitlicher Vergleich), `csrf_rotate`,
+  `csrf_clear`; Token liegt getrennt von den Anwendungsdaten
+- **Session-Cookies:** `session_cookie` (Secure, HttpOnly, SameSite=Lax,
+  Path=/, Max-Age) und `session_cookie_insecure` für lokale Entwicklung
+- **Beispiele:** `web_cookies`, `web_session_basic`,
+  `web_session_expiry`, `web_csrf_form`, `web_session_errors`
+- 501 Tests (321 Unit + 180 E2E), darunter Cookie-Parsing/Injection,
+  Session-Lebenszyklus, Kapazität, Ablauf, Zufalls-Fehlerpfad,
+  CSRF-Bindung und ein vollständiger HTTP-E2E mit Bloom-Client und
+  Bloom-Server (Cookie setzen, erneut senden, Session ändern,
+  CSRF prüfen)
+
+Vertagt (weiterhin geplant):
+
+- Persistente oder verteilte Sessions, Benutzerkonten, Login- und
+  Rollen-Systeme, JWT/OAuth, Multipart-Uploads
+- Streaming/Range-Requests, ETag/Last-Modified, automatisches Neuladen
 - Template-Includes, Makros, ausführbare Ausdrücke, Raw-HTML
 - GUI-Anbindung (aufbauend auf `std::win32`)
 - WebSocket, JSON-Streaming, Datenbankabstraktion

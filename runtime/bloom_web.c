@@ -1916,3 +1916,1207 @@ bloom_enum_Result_str_str bloom_web_form_encode(
     free(buf);
     return bloom_web_form_ok_str(result);
 }
+
+/* ---- cookies (reading `Cookie`, writing `Set-Cookie`) ------------------- */
+
+/*
+ * Incoming cookies: every `Cookie` header of the request is scanned in
+ * order. Pairs keep their order; repeated names are kept but are then
+ * ambiguous (see `cookie_get`). Malformed pairs (bad name token, control
+ * bytes, oversized name/value) are ignored instead of failing the whole
+ * request. Values are returned verbatim: no percent-decoding, no unquoting.
+ *
+ * Limits: 64 cookies, name 64 bytes, value 4096 bytes. Cookie headers
+ * beyond the limit are ignored.
+ */
+#define BLOOM_WEB_MAX_COOKIES 64
+#define BLOOM_WEB_MAX_COOKIE_NAME 64
+#define BLOOM_WEB_MAX_COOKIE_VALUE 4096
+#define BLOOM_WEB_MAX_COOKIE_PATH 1024
+#define BLOOM_WEB_MAX_COOKIE_LINE 8192
+#define BLOOM_WEB_MAX_COOKIE_MAX_AGE 31536000
+#define BLOOM_WEB_MAX_HEADERS_TOTAL 16384
+
+typedef struct {
+    bloom_str name;
+    bloom_str value;
+} bloom_web_cookie_entry;
+
+typedef struct {
+    size_t rc;
+    bloom_web_cookie_entry *items;
+    size_t count;
+    size_t cap;
+} bloom_web_cookies;
+
+static bool bloom_web_cookie_token_char(unsigned char c) {
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || (c >= '0' && c <= '9')) {
+        return true;
+    }
+    switch (c) {
+        case '!': case '#': case '$': case '%': case '&': case '\'':
+        case '*': case '+': case '-': case '.': case '^': case '_':
+        case '`': case '|': case '~':
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool bloom_web_cookie_name_ok(const char *p, size_t n) {
+    if (n == 0 || n > BLOOM_WEB_MAX_COOKIE_NAME) {
+        return false;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (!bloom_web_cookie_token_char((unsigned char)p[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* RFC 6265 cookie-octet: visible ASCII except space, `"`, `,`, `;`, `\`. */
+static bool bloom_web_cookie_value_char(unsigned char c) {
+    if (c < 0x21 || c > 0x7E) {
+        return false;
+    }
+    return c != '"' && c != ',' && c != ';' && c != '\\';
+}
+
+static bool bloom_web_cookie_value_ok(const char *p, size_t n) {
+    if (n > BLOOM_WEB_MAX_COOKIE_VALUE) {
+        return false;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (!bloom_web_cookie_value_char((unsigned char)p[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool bloom_web_cookie_path_ok(const char *p, size_t n) {
+    if (n == 0) {
+        return true; /* omit the Path attribute */
+    }
+    if (n > BLOOM_WEB_MAX_COOKIE_PATH || p[0] != '/') {
+        return false;
+    }
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)p[i];
+        if (c < 0x21 || c > 0x7E || c == ';' || c == '"' || c == '\\') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void bloom_web_cookies_push(
+    bloom_web_cookies *c,
+    bloom_str name,
+    bloom_str value
+) {
+    if (c->count >= BLOOM_WEB_MAX_COOKIES) {
+        bloom_str_drop(&name);
+        bloom_str_drop(&value);
+        return;
+    }
+    if (c->count == c->cap) {
+        size_t cap = c->cap ? c->cap * 2 : 8;
+        bloom_web_cookie_entry *ne = (bloom_web_cookie_entry *)realloc(
+            c->items,
+            cap * sizeof *ne
+        );
+        if (ne == NULL) {
+            bloom_panicf(NULL, 0, "out of memory");
+        }
+        c->items = ne;
+        c->cap = cap;
+    }
+    c->items[c->count].name = name;
+    c->items[c->count].value = value;
+    c->count++;
+}
+
+static bloom_struct_std_web_Cookies bloom_web_cookies_wrap(bloom_web_cookies *c) {
+    bloom_struct_std_web_Cookies v;
+    v.f_id = (bloom_cookies_handle)(intptr_t)c;
+    return v;
+}
+
+static bloom_web_cookies *bloom_web_cookies_unwrap(bloom_struct_std_web_Cookies v) {
+    return (bloom_web_cookies *)(intptr_t)v.f_id;
+}
+
+bloom_cookies_handle bloom_web_cookies_retain(bloom_cookies_handle h) {
+    bloom_web_cookies *c = (bloom_web_cookies *)(intptr_t)h;
+    if (c != NULL) {
+        c->rc++;
+    }
+    return h;
+}
+
+void bloom_web_cookies_release(bloom_cookies_handle *h) {
+    if (h == NULL || *h == 0) {
+        return;
+    }
+    bloom_web_cookies *c = (bloom_web_cookies *)(intptr_t)*h;
+    *h = 0;
+    if (c->rc > 0) {
+        c->rc--;
+    }
+    if (c->rc == 0) {
+        for (size_t i = 0; i < c->count; i++) {
+            bloom_str_drop(&c->items[i].name);
+            bloom_str_drop(&c->items[i].value);
+        }
+        free(c->items);
+        free(c);
+        bloom_live_allocs--;
+    }
+}
+
+static bloom_web_cookies *bloom_web_cookies_new(void) {
+    bloom_web_cookies *c = (bloom_web_cookies *)calloc(1, sizeof(bloom_web_cookies));
+    if (c == NULL) {
+        bloom_panicf(NULL, 0, "out of memory");
+    }
+    c->rc = 1;
+    bloom_live_allocs++;
+    return c;
+}
+
+/* Parses one `Cookie:` header value (`a=1; b=2`). */
+static void bloom_web_cookie_parse_value(bloom_web_cookies *out, const char *p, size_t n) {
+    size_t i = 0;
+    while (i < n && out->count < BLOOM_WEB_MAX_COOKIES) {
+        size_t start = i;
+        while (i < n && p[i] != ';') {
+            i++;
+        }
+        size_t len = i - start;
+        if (i < n) {
+            i++;
+        }
+        while (start < n && len > 0 && (p[start] == ' ' || p[start] == '\t')) {
+            start++;
+            len--;
+        }
+        while (len > 0 && (p[start + len - 1] == ' ' || p[start + len - 1] == '\t')) {
+            len--;
+        }
+        if (len == 0) {
+            continue;
+        }
+        size_t eq = 0;
+        while (eq < len && p[start + eq] != '=') {
+            eq++;
+        }
+        if (eq >= len) {
+            continue; /* no `=`: not a cookie-pair */
+        }
+        size_t name_len = eq;
+        while (name_len > 0
+               && (p[start + name_len - 1] == ' ' || p[start + name_len - 1] == '\t')) {
+            name_len--;
+        }
+        size_t value_start = start + eq + 1;
+        size_t value_len = len - eq - 1;
+        while (value_len > 0 && (p[value_start] == ' ' || p[value_start] == '\t')) {
+            value_start++;
+            value_len--;
+        }
+        while (value_len > 0
+               && (p[value_start + value_len - 1] == ' ' || p[value_start + value_len - 1] == '\t')) {
+            value_len--;
+        }
+        if (!bloom_web_cookie_name_ok(p + start, name_len)
+            || !bloom_web_cookie_value_ok(p + value_start, value_len)) {
+            continue; /* ignore malformed pairs */
+        }
+        bloom_str name = bloom_str_from_bytes(p + start, name_len);
+        bloom_str value = bloom_str_from_bytes(p + value_start, value_len);
+        bloom_web_cookies_push(out, name, value);
+    }
+}
+
+/* Parses every `Cookie:` header of the request, in order. */
+bloom_enum_Result_std_web_Cookies_str bloom_web_cookies_parse(
+    bloom_struct_std_http_HttpRequest request
+) {
+    bloom_enum_Result_std_web_Cookies_str result;
+    bloom_str headers = request.f_headers;
+    bloom_web_cookies *out = bloom_web_cookies_new();
+    size_t i = 0;
+    while (i < headers.len && out->count < BLOOM_WEB_MAX_COOKIES) {
+        size_t start = i;
+        while (i < headers.len && headers.data[i] != '\n') {
+            i++;
+        }
+        size_t len = i - start;
+        if (i < headers.len) {
+            i++;
+        }
+        if (len > 0 && headers.data[start + len - 1] == '\r') {
+            len--;
+        }
+        size_t colon = 0;
+        while (colon < len && headers.data[start + colon] != ':') {
+            colon++;
+        }
+        if (colon >= len) {
+            continue;
+        }
+        size_t name_end = colon;
+        while (name_end > 0
+               && (headers.data[start + name_end - 1] == ' '
+                   || headers.data[start + name_end - 1] == '\t')) {
+            name_end--;
+        }
+        if (!bloom_web_ct_ci_eq(headers.data + start, name_end, "cookie")) {
+            continue;
+        }
+        size_t value_start = start + colon + 1;
+        size_t value_len = len - colon - 1;
+        bloom_web_cookie_parse_value(out, headers.data + value_start, value_len);
+    }
+    result.tag = 0;
+    result.data.m_Ok._0 = bloom_web_cookies_wrap(out);
+    return result;
+}
+
+int64_t bloom_web_cookie_count(bloom_struct_std_web_Cookies cookies) {
+    bloom_web_cookies *c = bloom_web_cookies_unwrap(cookies);
+    return c == NULL ? 0 : (int64_t)c->count;
+}
+
+static size_t bloom_web_cookie_matches(
+    bloom_web_cookies *c,
+    bloom_str name
+) {
+    size_t found = 0;
+    if (c != NULL) {
+        for (size_t i = 0; i < c->count; i++) {
+            if (bloom_web_form_name_eq(c->items[i].name, name)) {
+                found++;
+            }
+        }
+    }
+    return found;
+}
+
+bool bloom_web_cookie_has(bloom_struct_std_web_Cookies cookies, bloom_str name) {
+    return bloom_web_cookie_matches(bloom_web_cookies_unwrap(cookies), name) > 0;
+}
+
+/*
+ * Exactly one value or an error. A repeated cookie name is ambiguous and is
+ * never silently reduced to the first value (cookie tossing / path scoping
+ * can produce duplicates).
+ */
+bloom_enum_Result_str_str bloom_web_cookie_get(
+    bloom_struct_std_web_Cookies cookies,
+    bloom_str name
+) {
+    bloom_web_cookies *c = bloom_web_cookies_unwrap(cookies);
+    size_t found = 0;
+    bloom_str value = {0, NULL, 0};
+    if (c != NULL) {
+        for (size_t i = 0; i < c->count; i++) {
+            if (bloom_web_form_name_eq(c->items[i].name, name)) {
+                found++;
+                if (found == 1) {
+                    value = c->items[i].value;
+                }
+            }
+        }
+    }
+    if (found == 0) {
+        return bloom_web_form_err_str(bloom_web_msg("cookie_get", "cookie not found"));
+    }
+    if (found > 1) {
+        return bloom_web_form_err_str(bloom_web_msg(
+            "cookie_get",
+            "cookie has multiple values"
+        ));
+    }
+    return bloom_web_form_ok_str(bloom_str_clone(value));
+}
+
+bloom_enum_Option_str bloom_web_cookie_first(
+    bloom_struct_std_web_Cookies cookies,
+    bloom_str name
+) {
+    bloom_web_cookies *c = bloom_web_cookies_unwrap(cookies);
+    if (c != NULL) {
+        for (size_t i = 0; i < c->count; i++) {
+            if (bloom_web_form_name_eq(c->items[i].name, name)) {
+                return bloom_web_form_some(bloom_str_clone(c->items[i].value));
+            }
+        }
+    }
+    return bloom_web_form_none();
+}
+
+bloom_arr_str bloom_web_cookie_names(bloom_struct_std_web_Cookies cookies) {
+    bloom_arr_str out = bloom_arr_str_new();
+    bloom_web_cookies *c = bloom_web_cookies_unwrap(cookies);
+    if (c == NULL) {
+        return out;
+    }
+    for (size_t i = 0; i < c->count; i++) {
+        bool seen = false;
+        for (size_t k = 0; k < i && !seen; k++) {
+            if (bloom_web_form_name_eq(c->items[k].name, c->items[i].name)) {
+                seen = true;
+            }
+        }
+        if (!seen) {
+            bloom_arr_str_push_owned(out, bloom_str_clone(c->items[i].name));
+        }
+    }
+    return out;
+}
+
+/* Canonical SameSite spelling; empty input means "omit the attribute". */
+static bool bloom_web_same_site(
+    bloom_str in,
+    const char **out,
+    size_t *out_len
+) {
+    if (in.len == 0) {
+        *out = NULL;
+        *out_len = 0;
+        return true;
+    }
+    if (bloom_web_ct_ci_eq(in.data, in.len, "lax")) {
+        *out = "Lax";
+        *out_len = 3;
+        return true;
+    }
+    if (bloom_web_ct_ci_eq(in.data, in.len, "strict")) {
+        *out = "Strict";
+        *out_len = 6;
+        return true;
+    }
+    if (bloom_web_ct_ci_eq(in.data, in.len, "none")) {
+        *out = "None";
+        *out_len = 4;
+        return true;
+    }
+    return false;
+}
+
+/* Appends `Set-Cookie: name=value` plus the validated attributes. */
+static bloom_enum_Result_str_str bloom_web_build_set_cookie(
+    bloom_str name,
+    bloom_str value,
+    bloom_str path,
+    int64_t max_age,
+    const char *same_site,
+    size_t same_site_len,
+    bool http_only,
+    bool secure,
+    const char *op
+) {
+    if (!bloom_web_cookie_name_ok(name.data, name.len)) {
+        return bloom_web_form_err_str(bloom_web_msg(
+            op,
+            "invalid cookie name (token characters, 1..64 bytes)"
+        ));
+    }
+    if (!bloom_web_cookie_value_ok(value.data, value.len)) {
+        return bloom_web_form_err_str(bloom_web_msg(
+            op,
+            "invalid cookie value (visible ASCII without `\"`, `,`, `;`, `\\`)"
+        ));
+    }
+    if (!bloom_web_cookie_path_ok(path.data, path.len)) {
+        return bloom_web_form_err_str(bloom_web_msg(
+            op,
+            "invalid cookie path (must start with `/`, no control bytes or `;`)"
+        ));
+    }
+    if (max_age < 0 || max_age > BLOOM_WEB_MAX_COOKIE_MAX_AGE) {
+        return bloom_web_form_err_str(bloom_web_msg(
+            op,
+            "cookie Max-Age out of range (0..31536000 seconds)"
+        ));
+    }
+    if (same_site_len == 4 && memcmp(same_site, "None", 4) == 0 && !secure) {
+        return bloom_web_form_err_str(bloom_web_msg(
+            op,
+            "SameSite=None requires Secure"
+        ));
+    }
+    size_t total = 12 + name.len + 1 + value.len;
+    total += path.len > 0 ? 8 + path.len : 0;
+    total += max_age > 0 ? 11 + 20 : 0;
+    total += http_only ? 10 : 0;
+    total += secure ? 8 : 0;
+    total += same_site_len > 0 ? 11 + same_site_len : 0;
+    total += 1;
+    char *buf = (char *)malloc(total);
+    if (buf == NULL) {
+        bloom_panicf(NULL, 0, "out of memory");
+    }
+    size_t at = 0;
+    memcpy(buf + at, "Set-Cookie: ", 12);
+    at += 12;
+    memcpy(buf + at, name.data, name.len);
+    at += name.len;
+    buf[at++] = '=';
+    memcpy(buf + at, value.data, value.len);
+    at += value.len;
+    if (path.len > 0) {
+        memcpy(buf + at, "; Path=", 7);
+        at += 7;
+        memcpy(buf + at, path.data, path.len);
+        at += path.len;
+    }
+    if (max_age > 0) {
+        char num[24];
+        int n = snprintf(num, sizeof num, "%" PRId64, max_age);
+        memcpy(buf + at, "; Max-Age=", 10);
+        at += 10;
+        memcpy(buf + at, num, (size_t)n);
+        at += (size_t)n;
+    }
+    if (http_only) {
+        memcpy(buf + at, "; HttpOnly", 10);
+        at += 10;
+    }
+    if (secure) {
+        memcpy(buf + at, "; Secure", 8);
+        at += 8;
+    }
+    if (same_site_len > 0) {
+        memcpy(buf + at, "; SameSite=", 11);
+        at += 11;
+        memcpy(buf + at, same_site, same_site_len);
+        at += same_site_len;
+    }
+    bloom_str line = bloom_str_from_bytes(buf, at);
+    free(buf);
+    return bloom_web_form_ok_str(line);
+}
+
+bloom_enum_Result_str_str bloom_web_set_cookie(
+    bloom_str name,
+    bloom_str value,
+    bloom_struct_std_web_CookieOptions options
+) {
+    const char *same_site = NULL;
+    size_t same_site_len = 0;
+    if (!bloom_web_same_site(
+            options.f_same_site,
+            &same_site,
+            &same_site_len
+        )) {
+        return bloom_web_form_err_str(bloom_web_msg(
+            "set_cookie",
+            "invalid SameSite value (Lax, Strict, None or empty)"
+        ));
+    }
+    return bloom_web_build_set_cookie(
+        name,
+        value,
+        options.f_path,
+        options.f_max_age,
+        same_site,
+        same_site_len,
+        options.f_http_only,
+        !options.f_insecure_http,
+        "set_cookie"
+    );
+}
+
+/*
+ * Expires a cookie with the same name and path. `insecure_http` must be
+ * true only for plain-HTTP development setups; otherwise `Secure` is added.
+ */
+bloom_enum_Result_str_str bloom_web_delete_cookie(
+    bloom_str name,
+    bloom_str path,
+    bool insecure_http
+) {
+    bloom_str empty;
+    empty.rc = 0;
+    empty.data = NULL;
+    empty.len = 0;
+    return bloom_web_build_set_cookie(
+        name,
+        empty,
+        path,
+        0,
+        "Lax",
+        3,
+        true,
+        !insecure_http,
+        "delete_cookie"
+    );
+}
+
+/* Joins validated `Set-Cookie` lines into a header block (one per line). */
+bloom_enum_Result_str_str bloom_web_cookie_headers(bloom_arr_str lines) {
+    size_t total = 0;
+    for (size_t i = 0; i < lines->len; i++) {
+        bloom_str line = lines->data[i];
+        if (line.len == 0 || line.len > BLOOM_WEB_MAX_COOKIE_LINE) {
+            return bloom_web_form_err_str(bloom_web_msg(
+                "cookie_headers",
+                "cookie header line is empty or too long"
+            ));
+        }
+        for (size_t k = 0; k < line.len; k++) {
+            unsigned char ch = (unsigned char)line.data[k];
+            if (ch == '\r' || ch == '\n' || ch < 0x20 || ch == 0x7F) {
+                return bloom_web_form_err_str(bloom_web_msg(
+                    "cookie_headers",
+                    "cookie header line must not contain CR, LF or control bytes"
+                ));
+            }
+        }
+        size_t colon = 0;
+        while (colon < line.len && line.data[colon] != ':') {
+            colon++;
+        }
+        if (colon >= line.len
+            || !bloom_web_ct_ci_eq(line.data, colon, "set-cookie")) {
+            return bloom_web_form_err_str(bloom_web_msg(
+                "cookie_headers",
+                "expected `Set-Cookie: ...` lines"
+            ));
+        }
+        total += line.len + (i > 0 ? 2 : 0);
+        if (total > BLOOM_WEB_MAX_HEADERS_TOTAL) {
+            return bloom_web_form_err_str(bloom_web_msg(
+                "cookie_headers",
+                "cookie headers exceed 16384 bytes"
+            ));
+        }
+    }
+    char *buf = (char *)malloc(total + 1);
+    if (buf == NULL) {
+        bloom_panicf(NULL, 0, "out of memory");
+    }
+    size_t at = 0;
+    for (size_t i = 0; i < lines->len; i++) {
+        if (i > 0) {
+            buf[at++] = '\r';
+            buf[at++] = '\n';
+        }
+        memcpy(buf + at, lines->data[i].data, lines->data[i].len);
+        at += lines->data[i].len;
+    }
+    bloom_str block = bloom_str_from_bytes(buf, at);
+    free(buf);
+    return bloom_web_form_ok_str(block);
+}
+
+/* ---- cryptographically secure random bytes ------------------------------ */
+
+#ifdef _WIN32
+#include <bcrypt.h>
+#endif
+
+/*
+ * Operating-system CSPRNG only: `BCryptGenRandom` on Windows, the
+ * `/dev/urandom` device on POSIX. There is no fallback to a userspace
+ * generator; callers must fail when this returns false.
+ *
+ * `BLOOM_WEB_TEST_FAIL_RANDOM` is an internal fault-injection hook for the
+ * test suite (it makes every call fail). It is not part of the public API.
+ */
+static bool bloom_web_random_bytes(unsigned char *out, size_t n) {
+    const char *fail = getenv("BLOOM_WEB_TEST_FAIL_RANDOM");
+    if (fail != NULL && fail[0] != '\0'
+        && !(fail[0] == '0' && fail[1] == '\0')) {
+        return false;
+    }
+    if (n == 0) {
+        return true;
+    }
+#ifdef _WIN32
+    NTSTATUS status = BCryptGenRandom(
+        NULL,
+        out,
+        (ULONG)n,
+        BCRYPT_USE_SYSTEM_PREFERRED_RNG
+    );
+    return status == 0;
+#else
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd < 0) {
+        return false;
+    }
+    size_t got = 0;
+    while (got < n) {
+        ssize_t r = read(fd, out + got, n - got);
+        if (r < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            close(fd);
+            return false;
+        }
+        if (r == 0) {
+            close(fd);
+            return false;
+        }
+        got += (size_t)r;
+    }
+    close(fd);
+    return true;
+#endif
+}
+
+/* Unpadded base64url; caller provides ceil(n*4/3) bytes (no NUL needed). */
+static size_t bloom_web_base64url(const unsigned char *in, size_t n, char *out) {
+    static const char table[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    size_t o = 0;
+    size_t i = 0;
+    while (i + 2 < n) {
+        uint32_t v = ((uint32_t)in[i] << 16) | ((uint32_t)in[i + 1] << 8)
+            | (uint32_t)in[i + 2];
+        out[o++] = table[(v >> 18) & 63];
+        out[o++] = table[(v >> 12) & 63];
+        out[o++] = table[(v >> 6) & 63];
+        out[o++] = table[v & 63];
+        i += 3;
+    }
+    if (i < n) {
+        uint32_t v = (uint32_t)in[i] << 16;
+        if (i + 1 < n) {
+            v |= (uint32_t)in[i + 1] << 8;
+        }
+        out[o++] = table[(v >> 18) & 63];
+        out[o++] = table[(v >> 12) & 63];
+        if (i + 1 < n) {
+            out[o++] = table[(v >> 6) & 63];
+        }
+    }
+    return o;
+}
+
+#define BLOOM_WEB_SESSION_ID_BYTES 32
+#define BLOOM_WEB_SESSION_ID_CHARS 43
+#define BLOOM_WEB_CSRF_BYTES 32
+#define BLOOM_WEB_CSRF_CHARS 43
+#define BLOOM_WEB_SESSION_MAX 65535
+#define BLOOM_WEB_SESSION_MAX_TTL 31536000
+
+static bool bloom_web_random_token(char *out, size_t chars, const char *op) {
+    unsigned char bytes[BLOOM_WEB_SESSION_ID_BYTES];
+    if (chars != BLOOM_WEB_SESSION_ID_CHARS
+        || !bloom_web_random_bytes(bytes, BLOOM_WEB_SESSION_ID_BYTES)) {
+        return false;
+    }
+    (void)op;
+    size_t n = bloom_web_base64url(bytes, BLOOM_WEB_SESSION_ID_BYTES, out);
+    return n == chars;
+}
+
+/* ---- sessions ----------------------------------------------------------- */
+
+typedef struct {
+    size_t rc;
+    bloom_str id;
+    bloom_str csrf;
+    bloom_struct_std_json_JsonValue data; /* object, owned */
+    int64_t expires_at_ms;                /* absolute, monotonic clock */
+} bloom_web_session;
+
+typedef struct {
+    size_t rc;
+    bloom_web_session **items; /* one owned reference per entry */
+    size_t count;
+    size_t cap;
+    size_t max;
+    int64_t ttl_ms;
+} bloom_web_session_store;
+
+static bloom_struct_std_web_Session bloom_web_session_wrap(bloom_web_session *s) {
+    bloom_struct_std_web_Session v;
+    v.f_id = (bloom_session_handle)(intptr_t)s;
+    return v;
+}
+
+static bloom_web_session *bloom_web_session_unwrap(bloom_struct_std_web_Session v) {
+    return (bloom_web_session *)(intptr_t)v.f_id;
+}
+
+static bloom_struct_std_web_SessionStore bloom_web_store_wrap(bloom_web_session_store *s) {
+    bloom_struct_std_web_SessionStore v;
+    v.f_id = (bloom_session_store_handle)(intptr_t)s;
+    return v;
+}
+
+static bloom_web_session_store *bloom_web_store_unwrap(bloom_struct_std_web_SessionStore v) {
+    return (bloom_web_session_store *)(intptr_t)v.f_id;
+}
+
+static void bloom_web_session_free(bloom_web_session *s) {
+    bloom_str_drop(&s->id);
+    bloom_str_drop(&s->csrf);
+    bloom_json_release(&s->data.f_id);
+    free(s);
+    bloom_live_allocs--;
+}
+
+bloom_session_handle bloom_web_session_retain(bloom_session_handle h) {
+    bloom_web_session *s = (bloom_web_session *)(intptr_t)h;
+    if (s != NULL) {
+        s->rc++;
+    }
+    return h;
+}
+
+void bloom_web_session_release(bloom_session_handle *h) {
+    if (h == NULL || *h == 0) {
+        return;
+    }
+    bloom_web_session *s = (bloom_web_session *)(intptr_t)*h;
+    *h = 0;
+    if (s->rc > 0) {
+        s->rc--;
+    }
+    if (s->rc == 0) {
+        bloom_web_session_free(s);
+    }
+}
+
+bloom_session_store_handle bloom_web_session_store_retain(bloom_session_store_handle h) {
+    bloom_web_session_store *s = (bloom_web_session_store *)(intptr_t)h;
+    if (s != NULL) {
+        s->rc++;
+    }
+    return h;
+}
+
+void bloom_web_session_store_release(bloom_session_store_handle *h) {
+    if (h == NULL || *h == 0) {
+        return;
+    }
+    bloom_web_session_store *s = (bloom_web_session_store *)(intptr_t)*h;
+    *h = 0;
+    if (s->rc > 0) {
+        s->rc--;
+    }
+    if (s->rc == 0) {
+        for (size_t i = 0; i < s->count; i++) {
+            bloom_session_handle sh = (bloom_session_handle)(intptr_t)s->items[i];
+            bloom_web_session_release(&sh);
+        }
+        free(s->items);
+        free(s);
+        bloom_live_allocs--;
+    }
+}
+
+/* Removes every expired session; returns how many were dropped. */
+static size_t bloom_web_store_purge(bloom_web_session_store *store) {
+    int64_t now = bloom_time_monotonic_millis();
+    size_t removed = 0;
+    size_t i = 0;
+    while (i < store->count) {
+        if (now >= store->items[i]->expires_at_ms) {
+            bloom_session_handle sh = (bloom_session_handle)(intptr_t)store->items[i];
+            bloom_web_session_release(&sh);
+            memmove(
+                &store->items[i],
+                &store->items[i + 1],
+                (store->count - i - 1) * sizeof *store->items
+            );
+            store->count--;
+            removed++;
+        } else {
+            i++;
+        }
+    }
+    return removed;
+}
+
+/*
+ * Creates a store. `max_sessions` (1..65535) bounds the number of live
+ * sessions; `ttl_seconds` (1..31536000) is an absolute lifetime from
+ * creation (never extended by accesses).
+ */
+bloom_enum_Result_std_web_SessionStore_str bloom_web_session_store_new(
+    int64_t max_sessions,
+    int64_t ttl_seconds
+) {
+    if (max_sessions < 1 || max_sessions > BLOOM_WEB_SESSION_MAX) {
+        bloom_enum_Result_std_web_SessionStore_str r;
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_web_msg(
+            "session_store",
+            "max_sessions out of range (1..65535)"
+        );
+        return r;
+    }
+    if (ttl_seconds < 1 || ttl_seconds > BLOOM_WEB_SESSION_MAX_TTL) {
+        bloom_enum_Result_std_web_SessionStore_str r;
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_web_msg(
+            "session_store",
+            "ttl_seconds out of range (1..31536000)"
+        );
+        return r;
+    }
+    bloom_web_session_store *store = (bloom_web_session_store *)calloc(
+        1,
+        sizeof(bloom_web_session_store)
+    );
+    if (store == NULL) {
+        bloom_panicf(NULL, 0, "out of memory");
+    }
+    store->rc = 1;
+    store->max = (size_t)max_sessions;
+    store->ttl_ms = ttl_seconds * 1000;
+    bloom_live_allocs++;
+    bloom_enum_Result_std_web_SessionStore_str r;
+    r.tag = 0;
+    r.data.m_Ok._0 = bloom_web_store_wrap(store);
+    return r;
+}
+
+int64_t bloom_web_session_count(bloom_struct_std_web_SessionStore store) {
+    bloom_web_session_store *s = bloom_web_store_unwrap(store);
+    return s == NULL ? 0 : (int64_t)s->count;
+}
+
+/* Creates a new session; fails when the store is full or random is down. */
+bloom_enum_Result_std_web_Session_str bloom_web_session_new(
+    bloom_struct_std_web_SessionStore store
+) {
+    bloom_enum_Result_std_web_Session_str r;
+    bloom_web_session_store *s = bloom_web_store_unwrap(store);
+    if (s == NULL) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_web_msg("session_new", "invalid session store");
+        return r;
+    }
+    bloom_web_store_purge(s);
+    if (s->count >= s->max) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_web_msg(
+            "session_new",
+            "session store is full (no expired sessions)"
+        );
+        return r;
+    }
+    char idbuf[BLOOM_WEB_SESSION_ID_CHARS];
+    if (!bloom_web_random_token(idbuf, BLOOM_WEB_SESSION_ID_CHARS, "session_new")) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_web_msg(
+            "session_new",
+            "secure random source unavailable"
+        );
+        return r;
+    }
+    bloom_web_session *session = (bloom_web_session *)calloc(
+        1,
+        sizeof(bloom_web_session)
+    );
+    if (session == NULL) {
+        bloom_panicf(NULL, 0, "out of memory");
+    }
+    session->rc = 1;
+    session->id = bloom_str_from_bytes(idbuf, BLOOM_WEB_SESSION_ID_CHARS);
+    session->csrf.rc = 0;
+    session->csrf.data = NULL;
+    session->csrf.len = 0;
+    session->data = bloom_json_make_object();
+    int64_t now = bloom_time_monotonic_millis();
+    session->expires_at_ms = now > INT64_MAX - s->ttl_ms
+        ? INT64_MAX
+        : now + s->ttl_ms;
+    if (s->count == s->cap) {
+        size_t cap = s->cap ? s->cap * 2 : 8;
+        bloom_web_session **ni = (bloom_web_session **)realloc(
+            s->items,
+            cap * sizeof *ni
+        );
+        if (ni == NULL) {
+            bloom_panicf(NULL, 0, "out of memory");
+        }
+        s->items = ni;
+        s->cap = cap;
+    }
+    s->items[s->count++] = session;
+    /* The store owns one reference in addition to the caller's handle. */
+    session->rc++;
+    bloom_live_allocs++;
+    r.tag = 0;
+    r.data.m_Ok._0 = bloom_web_session_wrap(session);
+    return r;
+}
+
+static bool bloom_web_session_id_ok(bloom_str id) {
+    if (id.len != BLOOM_WEB_SESSION_ID_CHARS) {
+        return false;
+    }
+    for (size_t i = 0; i < id.len; i++) {
+        unsigned char c = (unsigned char)id.data[i];
+        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+            || (c >= '0' && c <= '9') || c == '-' || c == '_';
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * Resumes the session referenced by the cookie `cookie_name`. Fails when the
+ * cookie is missing, duplicated, malformed, unknown or expired; callers that
+ * want a new session must call `session_new` explicitly (so they always know
+ * whether a session was resumed or created).
+ */
+bloom_enum_Result_std_web_Session_str bloom_web_session_load(
+    bloom_struct_std_web_SessionStore store,
+    bloom_struct_std_web_Cookies cookies,
+    bloom_str cookie_name
+) {
+    bloom_enum_Result_std_web_Session_str r;
+    bloom_web_session_store *s = bloom_web_store_unwrap(store);
+    if (s == NULL) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_web_msg("session_load", "invalid session store");
+        return r;
+    }
+    bloom_web_cookies *c = bloom_web_cookies_unwrap(cookies);
+    size_t found = 0;
+    bloom_str id = {0, NULL, 0};
+    if (c != NULL) {
+        for (size_t i = 0; i < c->count; i++) {
+            if (bloom_web_form_name_eq(c->items[i].name, cookie_name)) {
+                found++;
+                if (found == 1) {
+                    id = c->items[i].value;
+                }
+            }
+        }
+    }
+    if (found == 0) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_web_msg("session_load", "session cookie not found");
+        return r;
+    }
+    if (found > 1) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_web_msg(
+            "session_load",
+            "session cookie is ambiguous (duplicate cookie name)"
+        );
+        return r;
+    }
+    if (!bloom_web_session_id_ok(id)) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_web_msg("session_load", "malformed session id");
+        return r;
+    }
+    bloom_web_store_purge(s);
+    for (size_t i = 0; i < s->count; i++) {
+        if (bloom_web_form_name_eq(s->items[i]->id, id)) {
+            bloom_web_session_retain((bloom_session_handle)(intptr_t)s->items[i]);
+            r.tag = 0;
+            r.data.m_Ok._0 = bloom_web_session_wrap(s->items[i]);
+            return r;
+        }
+    }
+    r.tag = 1;
+    r.data.m_Err._0 = bloom_web_msg("session_load", "unknown or expired session");
+    return r;
+}
+
+bloom_str bloom_web_session_id(bloom_struct_std_web_Session session) {
+    bloom_web_session *s = bloom_web_session_unwrap(session);
+    if (s == NULL) {
+        return bloom_str_from_bytes("", 0);
+    }
+    return bloom_str_clone(s->id);
+}
+
+/* Returns the shared data object (mutations are visible to all handles). */
+bloom_struct_std_json_JsonValue bloom_web_session_data(
+    bloom_struct_std_web_Session session
+) {
+    bloom_web_session *s = bloom_web_session_unwrap(session);
+    bloom_struct_std_json_JsonValue v;
+    if (s == NULL) {
+        v.f_id = 0;
+        return v;
+    }
+    bloom_json_retain(s->data.f_id);
+    return s->data;
+}
+
+/* Removes the session from the store; existing handles keep the data. */
+bool bloom_web_session_destroy(
+    bloom_struct_std_web_SessionStore store,
+    bloom_struct_std_web_Session session
+) {
+    bloom_web_session_store *s = bloom_web_store_unwrap(store);
+    bloom_web_session *target = bloom_web_session_unwrap(session);
+    if (s == NULL || target == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < s->count; i++) {
+        if (s->items[i] == target) {
+            bloom_session_handle sh = (bloom_session_handle)(intptr_t)target;
+            bloom_web_session_release(&sh);
+            memmove(
+                &s->items[i],
+                &s->items[i + 1],
+                (s->count - i - 1) * sizeof *s->items
+            );
+            s->count--;
+            return true;
+        }
+    }
+    return false;
+}
+
+int64_t bloom_web_session_expire(bloom_struct_std_web_SessionStore store) {
+    bloom_web_session_store *s = bloom_web_store_unwrap(store);
+    if (s == NULL) {
+        return 0;
+    }
+    return (int64_t)bloom_web_store_purge(s);
+}
+
+/* `Set-Cookie` line for the session id; Secure unless `insecure_http`. */
+static bloom_enum_Result_str_str bloom_web_session_cookie_impl(
+    bloom_struct_std_web_Session session,
+    bloom_str name,
+    int64_t max_age_seconds,
+    bool insecure_http,
+    const char *op
+) {
+    bloom_web_session *s = bloom_web_session_unwrap(session);
+    if (s == NULL) {
+        return bloom_web_form_err_str(bloom_web_msg(op, "invalid session"));
+    }
+    if (max_age_seconds < 1
+        || max_age_seconds > BLOOM_WEB_MAX_COOKIE_MAX_AGE) {
+        return bloom_web_form_err_str(bloom_web_msg(
+            op,
+            "Max-Age out of range (1..31536000 seconds)"
+        ));
+    }
+    bloom_str path;
+    path.rc = BLOOM_STR_IMMORTAL;
+    path.data = "/";
+    path.len = 1;
+    return bloom_web_build_set_cookie(
+        name,
+        s->id,
+        path,
+        max_age_seconds,
+        "Lax",
+        3,
+        true,
+        !insecure_http,
+        op
+    );
+}
+
+bloom_enum_Result_str_str bloom_web_session_cookie(
+    bloom_struct_std_web_Session session,
+    bloom_str name,
+    int64_t max_age_seconds
+) {
+    return bloom_web_session_cookie_impl(
+        session,
+        name,
+        max_age_seconds,
+        false,
+        "session_cookie"
+    );
+}
+
+/* Development helper for plain HTTP: omits `Secure` on purpose. */
+bloom_enum_Result_str_str bloom_web_session_cookie_insecure(
+    bloom_struct_std_web_Session session,
+    bloom_str name,
+    int64_t max_age_seconds
+) {
+    return bloom_web_session_cookie_impl(
+        session,
+        name,
+        max_age_seconds,
+        true,
+        "session_cookie_insecure"
+    );
+}
+
+/* ---- CSRF tokens -------------------------------------------------------- */
+
+/* Returns the session's token, creating one on first use. */
+bloom_enum_Result_str_str bloom_web_csrf_token(bloom_struct_std_web_Session session) {
+    bloom_web_session *s = bloom_web_session_unwrap(session);
+    if (s == NULL) {
+        return bloom_web_form_err_str(bloom_web_msg("csrf_token", "invalid session"));
+    }
+    if (s->csrf.len == 0) {
+        char buf[BLOOM_WEB_CSRF_CHARS];
+        if (!bloom_web_random_token(buf, BLOOM_WEB_CSRF_CHARS, "csrf_token")) {
+            return bloom_web_form_err_str(bloom_web_msg(
+                "csrf_token",
+                "secure random source unavailable"
+            ));
+        }
+        s->csrf = bloom_str_from_bytes(buf, BLOOM_WEB_CSRF_CHARS);
+    }
+    return bloom_web_form_ok_str(bloom_str_clone(s->csrf));
+}
+
+bloom_enum_Result_str_str bloom_web_csrf_rotate(bloom_struct_std_web_Session session) {
+    bloom_web_session *s = bloom_web_session_unwrap(session);
+    if (s == NULL) {
+        return bloom_web_form_err_str(bloom_web_msg("csrf_rotate", "invalid session"));
+    }
+    char buf[BLOOM_WEB_CSRF_CHARS];
+    if (!bloom_web_random_token(buf, BLOOM_WEB_CSRF_CHARS, "csrf_rotate")) {
+        return bloom_web_form_err_str(bloom_web_msg(
+            "csrf_rotate",
+            "secure random source unavailable"
+        ));
+    }
+    bloom_str_drop(&s->csrf);
+    s->csrf = bloom_str_from_bytes(buf, BLOOM_WEB_CSRF_CHARS);
+    return bloom_web_form_ok_str(bloom_str_clone(s->csrf));
+}
+
+void bloom_web_csrf_clear(bloom_struct_std_web_Session session) {
+    bloom_web_session *s = bloom_web_session_unwrap(session);
+    if (s != NULL) {
+        bloom_str_drop(&s->csrf);
+        s->csrf.rc = 0;
+        s->csrf.data = NULL;
+        s->csrf.len = 0;
+    }
+}
+
+/*
+ * Constant-time comparison for equal-length tokens (the length itself is
+ * public). Missing tokens and foreign-session tokens always fail.
+ */
+bool bloom_web_csrf_check(
+    bloom_struct_std_web_Session session,
+    bloom_str token
+) {
+    bloom_web_session *s = bloom_web_session_unwrap(session);
+    if (s == NULL || s->csrf.len == 0 || token.len != s->csrf.len) {
+        return false;
+    }
+    volatile unsigned char diff = 0;
+    for (size_t i = 0; i < s->csrf.len; i++) {
+        diff = (unsigned char)(diff | (unsigned char)(s->csrf.data[i] ^ token.data[i]));
+    }
+    return diff == 0;
+}

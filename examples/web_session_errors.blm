@@ -1,0 +1,113 @@
+// Fehlerfälle rund um Sessions und CSRF: voller Store, fehlende und
+// unbekannte Cookies, ungültiger Token. Antworten sind reiner Text.
+// Nach 6 Anfragen beendet sich der Server.
+use std::web;
+use std::http;
+use std::net;
+
+fn send(conn: int, status: int, text: string) -> void {
+    match http::write_response(conn, status, "text/plain; charset=utf-8", text) {
+        Result::Ok(_) => println("Antwort " + str(status)),
+        Result::Err(e) => println("Schreibfehler: " + e)
+    };
+}
+
+fn handle_new(conn: int, store: web::SessionStore) -> void {
+    match web::session_new(store) {
+        Result::Ok(session) => send(conn, 200, "ok:" + web::session_id(session)),
+        Result::Err(e) => send(conn, 503, "error:" + e)
+    };
+}
+
+fn load_with(conn: int, store: web::SessionStore, cookies: web::Cookies) -> void {
+    match web::session_load(store, cookies, "sid") {
+        Result::Ok(session) => send(conn, 200, "loaded:" + web::session_id(session)),
+        Result::Err(e) => send(conn, 403, "error:" + e)
+    };
+}
+
+fn read_cookies(conn: int, store: web::SessionStore, request: http::HttpRequest) -> void {
+    match web::cookies(request) {
+        Result::Ok(cookies) => load_with(conn, store, cookies),
+        Result::Err(e) => send(conn, 400, "error:" + e)
+    };
+}
+
+fn check_form(conn: int, request: http::HttpRequest, session: web::Session) -> void {
+    match web::form_body_request(request) {
+        Result::Ok(form) => check_field(conn, form, session),
+        Result::Err(e) => send(conn, 400, "error:" + e)
+    };
+}
+
+fn check_field(conn: int, form: web::FormData, session: web::Session) -> void {
+    match web::form_first(form, "csrf") {
+        Option::Some(token) => report(conn, web::csrf_check(session, token)),
+        Option::None => send(conn, 400, "error:csrf fehlt")
+    };
+}
+
+fn report(conn: int, ok: bool) -> void {
+    if ok {
+        send(conn, 200, "csrf:valid");
+    } else {
+        send(conn, 403, "csrf:invalid");
+    }
+}
+
+fn post_check(conn: int, store: web::SessionStore, request: http::HttpRequest) -> void {
+    match web::cookies(request) {
+        Result::Ok(cookies) => with_session(conn, store, request, cookies),
+        Result::Err(e) => send(conn, 403, "error:keine Sitzung")
+    };
+}
+
+fn with_session(conn: int, store: web::SessionStore, request: http::HttpRequest, cookies: web::Cookies) -> void {
+    match web::session_load(store, cookies, "sid") {
+        Result::Ok(session) => check_form(conn, request, session),
+        Result::Err(e) => send(conn, 403, "error:" + e)
+    };
+}
+
+fn handle(conn: int, store: web::SessionStore, request: http::HttpRequest) -> void {
+    if request.target == "/new" {
+        handle_new(conn, store);
+    } else if request.target == "/load" {
+        read_cookies(conn, store, request);
+    } else if request.target == "/check" && request.method == "POST" {
+        post_check(conn, store, request);
+    } else {
+        send(conn, 404, "not found");
+    }
+}
+
+fn run() -> Result<int, string> {
+    let store = web::session_store(1, 60)?;
+    let listener = net::tcp_listen("127.0.0.1", 0, 8)?;
+    println(net::local_port(listener)?);
+    println("Fehler-Server bereit");
+    var i = 0;
+    while i < 6 {
+        let conn = net::tcp_accept(listener)?;
+        match http::read_request(conn) {
+            Result::Ok(request) => handle(conn, store, request),
+            Result::Err(e) => println("Lesefehler: " + e)
+        };
+        net::tcp_close(conn);
+        i = i + 1;
+    }
+    net::tcp_close(listener);
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}
