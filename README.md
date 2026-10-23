@@ -12,7 +12,7 @@ schreiben kann: Dateien lesen, im Netzwerk reden, JSON verarbeiten,
 HTML-Seiten ausliefern. Alles davon ist schon eingebaut und braucht
 keine externen Bibliotheken.
 
-Stand: **0.17.0**. Getestet wird auf Windows (MSVC). Linux und macOS
+Stand: **0.18.0**. Getestet wird auf Windows (MSVC). Linux und macOS
 sind im Code vorgesehen, aber ich entwickle und teste fast nur auf
 Windows.
 
@@ -78,7 +78,7 @@ fn main() -> int {
 - Standardbibliothek ohne Ballast: `std.math`, `std.fs`, `std.process`,
   `std.time`, `std.net`, `std.http` (Client und Server, mit HTTPS),
   `std.json`, `std.path`, `std.web` (Router, Formulare, Cookies, Sessions,
-  CSRF), `std.html`.
+  CSRF), `std.html`, `std.db` (eingebettetes SQLite).
 - `bloom fmt` räumt den Quelltext auf, `bloom check` prüft ohne zu
   bauen, `bloom init` legt ein Projekt an.
 - FFI zu C und ein paar Windows-Funktionen, falls man doch mal ans
@@ -103,26 +103,25 @@ Wenn Bloom keinen C-Compiler findet, sagt es dir, was fehlt. Welchen
 es nimmt, kann man mit `BLOOM_CC` erzwingen (`set BLOOM_CC=clang`).
 Mehr dazu steht in [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
-## Was in 0.17 dazugekommen ist
+## Was in 0.18 dazugekommen ist
 
-- Cookies lesen: `web::cookies(request)` liefert alle Cookies der
-  Anfrage. Doppelte Namen sind absichtlich mehrdeutig und werden nicht
-  stillschweigend auf den ersten Wert reduziert.
-- Cookies setzen: `web::set_cookie` mit geprüften Attributen
-  (`Path`, `Max-Age`, `HttpOnly`, `SameSite`). `Secure` ist der
-  Standard; wer über HTTP entwickeln will, muss das mit
-  `insecure_http: true` ausdrücklich sagen. `web::delete_cookie` räumt
-  mit demselben Namen und Pfad wieder auf.
-- Sessions: `web::session_store` mit begrenzter Anzahl und absoluter
-  Lebensdauer, `session_new` / `session_load` mit 32 zufälligen Bytes
-  aus der Betriebssystem-CSPRNG, Daten als JSON pro Session. Ablauf
-  läuft über die monotone Uhr, volle Stores lehnen neue Sessions ab,
-  statt aktive zu verdrängen.
-- CSRF: `web::csrf_token`, `csrf_check` (konstante Zeit), `csrf_rotate`
-  und `csrf_clear`, gebunden an die Session.
-- Wichtig: Das ist Grundlagenzeug, keine Anmeldung. Sessions liegen nur
-  im Speicher und sind nach einem Neustart weg. Die CSRF-Prüfung muss
-  die Anwendung bei jedem verändernden Request selbst aufrufen.
+- SQLite ist eingebaut: `std.db` mit `open`, `open_memory`, `prepare`,
+  typisierten `bind_*`-Funktionen, `step`/`execute`, Spaltenzugriff
+  nach Index und Name, Transaktionen und `busy_timeout`. Kein Server,
+  keine Installation, keine Verbindung zu irgendwas.
+- Prepared Statements sind der einzige Weg für Werte. SQL-Text wird
+  nicht in Bloom zusammengeklebt; Parameter ersetzen keine Tabellen-
+  oder Spaltennamen.
+- Strikt typisierte Spalten: INTEGER (64 Bit), REAL, TEXT (UTF-8,
+  auch mit NUL), BLOB (`fs::Bytes`, NUL-sicher) und NULL sind
+  unterscheidbar. Falsche Zieltypen sind Fehler, keine stillen
+  Konvertierungen.
+- SQLite 3.54.1 liegt als Amalgamation im Repo
+  (`runtime/sqlite3.c`, Public Domain, Hinweise in
+  `runtime/sqlite3_NOTICE.md`) und wird nur bei Programmen mit
+  `std::db` mitkompiliert.
+- `web::session_registered` sagt jetzt ausdrücklich, ob ein
+  Session-Handle noch im Store gilt (`false` nach `destroy`/Ablauf).
 
 ## Was (noch) nicht geht
 
@@ -151,7 +150,7 @@ Damit hier keine falschen Erwartungen entstehen:
 ## Selbst entwickeln
 
 ```bash
-cargo test                    # 502 Tests: Unit + echte kompilierte Programme
+cargo test                    # 508 Tests: Unit + echte kompilierte Programme
 cargo clippy --all-targets
 cargo fmt
 ```
@@ -169,9 +168,14 @@ bloom run examples/template_file.blm
 bloom run examples/form_parse.blm
 bloom run examples/web_form_server.blm
 bloom run examples/web_cookies.blm
+bloom run examples/db_prepared.blm
 bloom run examples/web_csrf_form.blm
 ```
 
 ## Lizenz
 
 MIT. Mach damit, was du willst.
+
+Die eingebettete SQLite-Amalgamation (`runtime/sqlite3.c`/`.h`) ist
+Public Domain. Version, Quelle und Prüfsumme stehen in
+[runtime/sqlite3_NOTICE.md](runtime/sqlite3_NOTICE.md).

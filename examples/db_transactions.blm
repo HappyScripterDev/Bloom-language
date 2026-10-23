@@ -1,0 +1,56 @@
+// Transaktionen: Commit, Rollback und die Fehler bei verschachteltem
+// BEGIN bzw. COMMIT ohne Transaktion.
+use std::db;
+
+fn count(database: db::Database) -> Result<int, string> {
+    let stmt = db::prepare(database, "SELECT count(*) FROM notes")?;
+    let has_row = db::step(stmt)?;
+    if !has_row {
+        return Result::Err("keine Zeile");
+    }
+    return db::column_int(stmt, 0);
+}
+
+fn add_note(database: db::Database, text: string) -> Result<int, string> {
+    let stmt = db::prepare(database, "INSERT INTO notes (text) VALUES (?1)")?;
+    db::bind_text(stmt, 1, text)?;
+    return db::execute(stmt);
+}
+
+fn run() -> Result<int, string> {
+    let database = db::open_memory()?;
+    let create = db::prepare(database, "CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)")?;
+    db::execute(create)?;
+
+    db::begin(database)?;
+    add_note(database, "wird verworfen")?;
+    println("in-tx=" + str(count(database)?));
+    db::rollback(database)?;
+    println("nach-rollback=" + str(count(database)?));
+
+    db::begin(database)?;
+    add_note(database, "wird gespeichert")?;
+    match db::begin(database) {
+        Result::Ok(_) => println("nested-begin=UNERWARTET"),
+        Result::Err(e) => println("nested-begin=" + e)
+    };
+    db::commit(database)?;
+    println("nach-commit=" + str(count(database)?));
+    match db::commit(database) {
+        Result::Ok(_) => println("commit-ohne-tx=UNERWARTET"),
+        Result::Err(e) => println("commit-ohne-tx=" + e)
+    };
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}

@@ -471,6 +471,55 @@ Vertagt (weiterhin geplant):
 - GUI-Anbindung (aufbauend auf `std::win32`)
 - WebSocket, JSON-Streaming, Datenbankabstraktion
 
+## Version 0.18.0 – SQLite und persistente Anwendungen (implementiert)
+
+- **Eingebettetes SQLite 3.54.1:** Amalgamation unter
+  `runtime/sqlite3.c`/`.h` (Public Domain, Herkunft und SHA3-256 in
+  `runtime/sqlite3_NOTICE.md`), vom Compiler eingebettet und bei
+  `std::db`-Programmen als zweite Übersetzungseinheit mit
+  `SQLITE_THREADSAFE=0`, `SQLITE_OMIT_LOAD_EXTENSION`, `SQLITE_DQS=0`
+  kompiliert. Keine Installation, kein Server, keine Downloads.
+- **`std::db`-API:** `open`, `open_memory`, `busy_timeout`, `prepare`,
+  `bind_null/int/float/bool/text/bytes`, `step`, `execute`, `reset`,
+  `column_count/name/index/type/int/float/bool/text/bytes`, `changes`,
+  `last_insert_rowid`, `begin`/`commit`/`rollback`.
+- **Semantik:** Bind-Parameter 1-basiert, Spalten 0-basiert; genau eine
+  SQL-Anweisung pro `prepare`; klare Statement-Zustände
+  (`fresh`/`row`/`done`/`error`, Reset löscht Bindungen); strikte
+  Spaltentypen (INTEGER/REAL/TEXT/BLOB/NULL ohne stille Konvertierung);
+  mehrdeutige Spaltennamen sind Fehler; ungebundene Parameter sind NULL.
+- **Transaktionen:** explizit, verschachteltes BEGIN ist ein Fehler;
+  offene Transaktionen werden beim Schließen zurückgerollt.
+- **Ownership:** Statements halten ihre Datenbank am Leben
+  (Referenzzählung), `sqlite3_finalize`/`close_v2` erst beim letzten
+  Handle; Fehlerpfade geben Teilressourcen frei; alle Tests leakfrei.
+- **Windows:** Dateipfade mit Leerzeichen/Unicode/absoluten Pfaden,
+  Verzeichnis- und fehlende Elternpfade als Fehler, schreibgeschützte
+  Dateien öffnen (Schreiben scheitert mit SQLITE_READONLY),
+  Busy-Timeout begrenzt.
+- **Web-Integration:** `web_database_app` speichert Formularwerte über
+  gebundene Parameter in SQLite, liest sie zurück und rendert sie
+  escaped über `std::html`.
+- **Sessions:** `web::session_registered` unterscheidet explizit
+  „Handle lebt“ von „Session ist im Store gültig“; kein Wiedereinsetzen
+  eines verworfenen Handles.
+- **Beispiele:** `db_open`, `db_prepared`, `db_query`,
+  `db_transactions`, `db_blob`, `db_errors`, `web_database_app`
+- 508 Tests (322 Unit + 186 E2E), darunter Typ-/Zustands-/SQL-Sicherheits-
+  /Busy-/Dateipfad-/Leak-Tests und ein HTTP-E2E mit Formular, Datenbank
+  und HTML-Antwort
+
+Vertagt (weiterhin geplant):
+
+- PostgreSQL/MySQL, ORMs, Schema-Migrationen, Connection-Pools,
+  asynchrone Datenbankzugriffe, Savepoints
+- Persistente oder verteilte Sessions, Benutzerkonten, JWT/OAuth,
+  Multipart-Uploads
+- Streaming/Range-Requests, ETag/Last-Modified, automatisches Neuladen
+- Template-Includes, Makros, ausführbare Ausdrücke, Raw-HTML
+- GUI-Anbindung (aufbauend auf `std::win32`)
+- WebSocket, JSON-Streaming
+
 ## Version 1.0.0+ – Ökosystem (geplant)
 
 - Paketmanager, Language Server (LSP), Debug-Informationen

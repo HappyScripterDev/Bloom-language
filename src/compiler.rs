@@ -163,11 +163,17 @@ impl Drop for TempDir {
     }
 }
 
+/// Vendored SQLite amalgamation (see `runtime/sqlite3_NOTICE.md`). Only
+/// written next to the generated C when the program loads `std::db`.
+const SQLITE_C: &str = include_str!("../runtime/sqlite3.c");
+const SQLITE_H: &str = include_str!("../runtime/sqlite3.h");
+
 struct Prepared {
     c_code: String,
     _tmp: TempDir,
     c_path: PathBuf,
     links: Vec<toolchain::LinkItem>,
+    extra_sources: Vec<String>,
 }
 
 /// Link inputs implied by loaded standard library modules.
@@ -201,6 +207,16 @@ fn prepare(src: &Path, links: &[toolchain::LinkItem]) -> Result<Prepared, BloomE
     let c_code = codegen::emit(&checked);
     let tmp = TempDir::new("bloom")?;
     let c_path = tmp.path.join("program.c");
+    let uses_db = checked.functions.iter().any(|sig| sig.module == "std::db");
+    let mut extra_sources = Vec::new();
+    if uses_db {
+        fs::write(tmp.path.join("sqlite3.c"), SQLITE_C).map_err(|e| {
+            BloomError::Io(format!("SQLite amalgamation could not be written: {}", e))
+        })?;
+        fs::write(tmp.path.join("sqlite3.h"), SQLITE_H)
+            .map_err(|e| BloomError::Io(format!("SQLite header could not be written: {}", e)))?;
+        extra_sources.push("sqlite3.c".to_string());
+    }
     fs::write(&c_path, &c_code).map_err(|e| {
         BloomError::Io(format!(
             "generated C code could not be written to `{}`: {}",
@@ -224,6 +240,7 @@ fn prepare(src: &Path, links: &[toolchain::LinkItem]) -> Result<Prepared, BloomE
         _tmp: tmp,
         c_path,
         links: all_links,
+        extra_sources,
     })
 }
 
@@ -245,7 +262,16 @@ fn write_emit_c(prepared: &Prepared, emit_c: &Path) -> Result<(), BloomError> {
             emit_c.display(),
             e
         ))
-    })
+    })?;
+    if !prepared.extra_sources.is_empty() {
+        let dir = emit_c.parent().unwrap_or_else(|| Path::new("."));
+        fs::write(dir.join("sqlite3.c"), SQLITE_C).map_err(|e| {
+            BloomError::Io(format!("SQLite amalgamation could not be written: {}", e))
+        })?;
+        fs::write(dir.join("sqlite3.h"), SQLITE_H)
+            .map_err(|e| BloomError::Io(format!("SQLite header could not be written: {}", e)))?;
+    }
+    Ok(())
 }
 
 fn build_exe(prepared: &Prepared) -> Result<PathBuf, BloomError> {
@@ -257,7 +283,13 @@ fn build_exe(prepared: &Prepared) -> Result<PathBuf, BloomError> {
     })?;
     let workdir = prepared.c_path.parent().expect("temp dir");
     let exe = tool
-        .compile(workdir, "program.c", toolchain::exe_name(), &prepared.links)
+        .compile(
+            workdir,
+            "program.c",
+            toolchain::exe_name(),
+            &prepared.links,
+            &prepared.extra_sources,
+        )
         .map_err(|output| BloomError::NativeCompile {
             toolchain: tool.label(),
             output,

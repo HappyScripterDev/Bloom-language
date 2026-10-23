@@ -8566,3 +8566,714 @@ fn main() -> int {
     assert!(stderr.contains("live sockets: 0"), "{stderr}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn db_api_natively() {
+    let dir = temp_dir("db-api");
+    let bin = dir.join("blob.bin");
+    write_file(&bin, "A\u{0}B\u{0}C");
+    let src = r#"use std::db;
+use std::fs;
+
+fn ok_bool(r: Result<bool, string>, label: string) -> void {
+    match r {
+        Result::Ok(v) => println(label + "=ok:" + str(v)),
+        Result::Err(e) => println(label + "=err:" + e)
+    };
+}
+
+fn ok_int(r: Result<int, string>, label: string) -> void {
+    match r {
+        Result::Ok(v) => println(label + "=ok:" + str(v)),
+        Result::Err(e) => println(label + "=err:" + e)
+    };
+}
+
+fn ok_text(r: Result<string, string>, label: string) -> void {
+    match r {
+        Result::Ok(v) => println(label + "=ok:" + v),
+        Result::Err(e) => println(label + "=err:" + e)
+    };
+}
+
+fn ok_stmt(r: Result<db::Statement, string>, label: string) -> void {
+    match r {
+        Result::Ok(_) => println(label + "=ok"),
+        Result::Err(e) => println(label + "=err:" + e)
+    };
+}
+
+fn ok_bytes(r: Result<fs::Bytes, string>, label: string) -> void {
+    match r {
+        Result::Ok(v) => println(label + "=ok:" + str(fs::bytes_len(v))),
+        Result::Err(e) => println(label + "=err:" + e)
+    };
+}
+
+fn detached_select() -> Result<db::Statement, string> {
+    let database = db::open_memory()?;
+    return db::prepare(database, "SELECT 42");
+}
+
+fn run() -> Result<int, string> {
+    let database = db::open_memory()?;
+    let create = db::prepare(database, "CREATE TABLE t (id INTEGER PRIMARY KEY, i INTEGER, f REAL, b INTEGER, s TEXT, n TEXT)")?;
+    db::execute(create)?;
+
+    let insert = db::prepare(database, "INSERT INTO t (i, f, b, s, n) VALUES (?1, ?2, ?3, ?4, ?5)")?;
+    db::bind_int(insert, 1, 9223372036854775807)?;
+    db::bind_float(insert, 2, 2.5)?;
+    db::bind_bool(insert, 3, true)?;
+    db::bind_text(insert, 4, "Gruesse \u{0} Bloom")?;
+    db::bind_null(insert, 5)?;
+    ok_int(db::execute(insert), "insert");
+    ok_int(db::execute(insert), "execute-twice");
+    ok_bool(db::bind_int(insert, 1, 1), "bind-after-execute");
+    ok_bool(db::reset(insert), "reset");
+    ok_bool(db::bind_int(insert, 0, 1), "bind-zero");
+    ok_bool(db::bind_int(insert, 9, 1), "bind-too-big");
+    ok_bool(db::bind_text(insert, 4, ""), "bind-empty");
+    ok_bool(db::bind_text(insert, 5, ""), "bind-empty2");
+    ok_bool(db::bind_int(insert, 1, 1), "bind-int");
+    ok_bool(db::bind_float(insert, 2, 1.25), "bind-float");
+    ok_bool(db::bind_bool(insert, 3, false), "bind-bool");
+    ok_int(db::execute(insert), "insert2");
+
+    let select = db::prepare(database, "SELECT i, f, b, s, n FROM t ORDER BY id")?;
+    ok_text(db::column_type(select, 0), "type-before-row");
+    ok_bool(db::step(select), "row1");
+    ok_int(db::column_int(select, 0), "int-max");
+    ok_text(db::column_text(select, 0), "int-as-text");
+    ok_text(db::column_type(select, 1), "type-float");
+    ok_text(db::column_type(select, 2), "type-bool");
+    ok_text(db::column_text(select, 3), "text-nul");
+    ok_int(db::column_int(select, 3), "text-as-int");
+    ok_text(db::column_type(select, 4), "type-null");
+    ok_bool(db::column_bool(select, 2), "bool-true");
+    ok_bool(db::step(select), "row2");
+    ok_int(db::column_int(select, 0), "int-2");
+    ok_text(db::column_text(select, 3), "empty-text");
+    ok_text(db::column_type(select, 3), "empty-type");
+    ok_bytes(db::column_bytes(select, 3), "text-as-bytes");
+    ok_bool(db::column_bool(select, 2), "bool-false");
+    ok_bool(db::step(select), "done");
+    ok_bool(db::step(select), "step-after-done");
+    ok_int(db::column_int(select, 0), "after-done");
+    ok_text(db::column_type(select, 0), "type-after-done");
+
+    let ambiguous = db::prepare(database, "SELECT 1 AS x, 2 AS x")?;
+    ok_int(db::column_index(ambiguous, "x"), "ambiguous");
+    ok_int(db::column_index(ambiguous, "nope"), "missing-column");
+    let named = db::prepare(database, "SELECT 1 AS x, 2 AS y")?;
+    ok_int(db::column_index(named, "y"), "column-index");
+    ok_text(db::column_name(named, 1), "column-name");
+    ok_text(db::column_name(named, 9), "column-name-oob");
+
+    ok_stmt(db::prepare(database, ""), "empty-sql");
+    ok_stmt(db::prepare(database, "SELECT 1; SELECT 2"), "multi-sql");
+
+    let updates = db::prepare(database, "UPDATE t SET b = 2 WHERE id = 1")?;
+    ok_int(db::execute(updates), "update");
+    println("changes=" + str(db::changes(database)));
+    println("last-rowid=" + str(db::last_insert_rowid(database)));
+
+    let weird = db::prepare(database, "SELECT b FROM t WHERE id = 1")?;
+    ok_bool(db::step(weird), "weird-row");
+    ok_bool(db::column_bool(weird, 0), "bool-not-0-1");
+
+    let has_blob_table = db::prepare(database, "CREATE TABLE blobs (data BLOB)")?;
+    db::execute(has_blob_table)?;
+    let insert_blob = db::prepare(database, "INSERT INTO blobs (data) VALUES (?1)")?;
+    let bytes = fs::read_bytes("@BIN@")?;
+    ok_bool(db::bind_bytes(insert_blob, 1, bytes), "bind-bytes");
+    ok_int(db::execute(insert_blob), "blob-insert");
+    let read_blob = db::prepare(database, "SELECT data, length(data), hex(data) FROM blobs")?;
+    ok_bool(db::step(read_blob), "blob-row");
+    read_blob_row(read_blob)?;
+
+    let unbound = db::prepare(database, "SELECT ?1 IS NULL")?;
+    db::step(unbound)?;
+    ok_bool(db::column_bool(unbound, 0), "unbound-null");
+
+    transaction_cases(database)?;
+    let detached = detached_select()?;
+    ok_bool(db::step(detached), "detached-step");
+    ok_int(db::column_int(detached, 0), "detached-value");
+    return Result::Ok(0);
+}
+
+fn read_blob_row(stmt: db::Statement) -> Result<int, string> {
+    let data = db::column_bytes(stmt, 0)?;
+    println("blob-len=" + str(fs::bytes_len(data)));
+    println("blob-length=" + str(db::column_int(stmt, 1)?));
+    println("blob-hex=" + db::column_text(stmt, 2)?);
+    ok_text(db::column_text(stmt, 0), "blob-as-text");
+    return Result::Ok(0);
+}
+
+fn transaction_cases(database: db::Database) -> Result<int, string> {
+    db::begin(database)?;
+    insert_marker(database, "rollback")?;
+    ok_bool(db::begin(database), "nested-begin");
+    db::rollback(database)?;
+    ok_int(count(database), "count-after-rollback");
+    db::begin(database)?;
+    insert_marker(database, "commit")?;
+    db::commit(database)?;
+    ok_int(count(database), "count-after-commit");
+    ok_bool(db::commit(database), "commit-without-tx");
+    ok_bool(db::rollback(database), "rollback-without-tx");
+    return Result::Ok(0);
+}
+
+fn insert_marker(database: db::Database, text: string) -> Result<int, string> {
+    let stmt = db::prepare(database, "INSERT INTO t (s) VALUES (?1)")?;
+    db::bind_text(stmt, 1, text)?;
+    return db::execute(stmt);
+}
+
+fn count(database: db::Database) -> Result<int, string> {
+    let stmt = db::prepare(database, "SELECT count(*) FROM t")?;
+    let has_row = db::step(stmt)?;
+    if !has_row {
+        return Result::Err("keine Zeile");
+    }
+    return db::column_int(stmt, 0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}
+"#
+    .replace("@BIN@", &bin.to_string_lossy().replace('\\', "\\\\"));
+    let file = dir.join("main.blm");
+    write_file(&file, &src);
+    let out = run_bloom_env(
+        &["run", file.to_string_lossy().as_ref()],
+        &[("BLOOM_MEM_REPORT", "1")],
+    );
+    if no_toolchain(&out) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(out.code, 0, "{}", out.combined());
+    let stdout = norm(&out.stdout);
+
+    assert!(stdout.contains("insert=ok:1\n"), "{stdout}");
+    assert!(
+        stdout.contains("execute-twice=err:execute: execute requires the fresh state"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("bind-after-execute=err:bind_int: bind is only allowed in the fresh state"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("bind-zero=err:bind_int: parameter index out of range"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("bind-too-big=err:bind_int: parameter index out of range"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("bind-empty=ok:true"), "{stdout}");
+    assert!(stdout.contains("insert2=ok:1"), "{stdout}");
+    assert!(
+        stdout.contains("type-before-row=err:column_type: columns are only available"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("row1=ok:true"), "{stdout}");
+    assert!(
+        stdout.contains("int-max=ok:9223372036854775807"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("int-as-text=err:column: column 0 is integer, expected text"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("type-float=ok:float"), "{stdout}");
+    assert!(stdout.contains("type-bool=ok:integer"), "{stdout}");
+    assert!(stdout.contains("type-null=ok:null"), "{stdout}");
+    assert!(stdout.contains("bool-true=ok:true"), "{stdout}");
+    assert!(stdout.contains("bool-false=ok:false"), "{stdout}");
+    assert!(stdout.contains("empty-text=ok:"), "{stdout}");
+    assert!(stdout.contains("empty-type=ok:text"), "{stdout}");
+    assert!(stdout.contains("done=ok:false"), "{stdout}");
+    assert!(
+        stdout.contains("step-after-done=err:step: statement is done"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("after-done=err:column_int: columns are only available"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ambiguous=err:column_index: column name is ambiguous"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("missing-column=err:column_index: column not found"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("column-index=ok:1"), "{stdout}");
+    assert!(stdout.contains("column-name=ok:y"), "{stdout}");
+    assert!(
+        stdout.contains("column-name-oob=err:column_name: column index out of range"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("empty-sql=err:prepare: empty SQL statement"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("multi-sql=err:prepare: only one SQL statement per prepare is allowed"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("update=ok:1"), "{stdout}");
+    assert!(stdout.contains("changes=1\n"), "{stdout}");
+    assert!(stdout.contains("last-rowid=2\n"), "{stdout}");
+    assert!(
+        stdout.contains("bool-not-0-1=err:column: column 0 is integer other than 0 or 1"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("bind-bytes=ok:true"), "{stdout}");
+    assert!(stdout.contains("blob-len=5"), "{stdout}");
+    assert!(stdout.contains("blob-length=5"), "{stdout}");
+    assert!(stdout.contains("blob-hex=4100420043"), "{stdout}");
+    assert!(
+        stdout.contains("blob-as-text=err:column: column 0 is blob, expected text"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("unbound-null=ok:true"), "{stdout}");
+    assert!(
+        stdout.contains("nested-begin=err:begin: cannot start a transaction"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("count-after-rollback=ok:2"), "{stdout}");
+    assert!(stdout.contains("count-after-commit=ok:3"), "{stdout}");
+    assert!(
+        stdout.contains("commit-without-tx=err:commit: cannot commit"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("rollback-without-tx=err:rollback: cannot rollback"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("detached-step=ok:true"), "{stdout}");
+    assert!(stdout.contains("detached-value=ok:42"), "{stdout}");
+    assert!(
+        out.stderr.contains("live allocations: 0"),
+        "{}",
+        out.combined()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn db_file_natively() {
+    let dir = temp_dir("db-file");
+    let sub = dir.join("Daten Bank \u{fc}");
+    std::fs::create_dir_all(&sub).expect("sub dir");
+    let db_path = sub.join("test datei.sqlite");
+    let readonly = dir.join("readonly.sqlite");
+    write_file(&readonly, "");
+    let _ = std::process::Command::new("cmd")
+        .args(["/c", "attrib", "+R", readonly.to_string_lossy().as_ref()])
+        .output();
+    let src = r#"use std::db;
+use std::fs;
+use std::time;
+
+fn open_and_insert(path: string) -> Result<int, string> {
+    let database = db::open(path)?;
+    let create = db::prepare(database, "CREATE TABLE IF NOT EXISTS t (x INTEGER)")?;
+    db::execute(create)?;
+    let insert = db::prepare(database, "INSERT INTO t (x) VALUES (?1)")?;
+    db::bind_int(insert, 1, 7)?;
+    return db::execute(insert);
+}
+
+fn count(path: string) -> Result<int, string> {
+    let database = db::open(path)?;
+    let stmt = db::prepare(database, "SELECT count(*) FROM t")?;
+    let has_row = db::step(stmt)?;
+    if !has_row {
+        return Result::Err("keine Zeile");
+    }
+    return db::column_int(stmt, 0);
+}
+
+fn busy(first_path: string, second_path: string) -> Result<int, string> {
+    let first = db::open(first_path)?;
+    db::begin(first)?;
+    let ins = db::prepare(first, "INSERT INTO t (x) VALUES (1)")?;
+    db::execute(ins)?;
+    let second = db::open(second_path)?;
+    db::busy_timeout(second, 50)?;
+    let t0 = time::monotonic_millis();
+    let blocked = db::prepare(second, "INSERT INTO t (x) VALUES (2)")?;
+    match db::execute(blocked) {
+        Result::Ok(_) => println("busy=UNERWARTET-OK"),
+        Result::Err(e) => println("busy=err:" + e + "|fast=" + str(time::monotonic_millis() - t0 < 2000))
+    };
+    db::reset(blocked)?;
+    db::rollback(first)?;
+    let retry = db::prepare(second, "INSERT INTO t (x) VALUES (3)")?;
+    return db::execute(retry);
+}
+
+fn run() -> Result<int, string> {
+    let path = "@DB@";
+    println("first-insert=" + str(open_and_insert(path)?));
+    println("count=" + str(count(path)?));
+    println("busy-retry=" + str(busy(path, path)?));
+    println("final=" + str(count(path)?));
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    let code = match run() {
+        Result::Ok(v) => v,
+        Result::Err(e) => fail(e)
+    };
+    match db::open("@READONLY@") {
+        Result::Ok(database) => readonly_case(database),
+        Result::Err(e) => println("readonly-open=err:" + e)
+    };
+    return 0;
+}
+
+fn readonly_case(database: db::Database) -> void {
+    println("readonly-open=ok");
+    match db::prepare(database, "CREATE TABLE r (x INTEGER)") {
+        Result::Ok(stmt) => readonly_write(stmt),
+        Result::Err(e) => println("readonly-write=err:" + e)
+    };
+}
+
+fn readonly_write(stmt: db::Statement) -> void {
+    match db::execute(stmt) {
+        Result::Ok(_) => println("readonly-write=UNERWARTET-OK"),
+        Result::Err(e) => println("readonly-write=err:" + e)
+    };
+}
+"#
+    .replace(
+        "@DB@",
+        &db_path.to_string_lossy().replace('\\', "\\\\"),
+    )
+    .replace(
+        "@READONLY@",
+        &readonly.to_string_lossy().replace('\\', "\\\\"),
+    );
+    let file = dir.join("main.blm");
+    write_file(&file, &src);
+    let out = run_bloom_env(
+        &["run", file.to_string_lossy().as_ref()],
+        &[("BLOOM_MEM_REPORT", "1")],
+    );
+    if no_toolchain(&out) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(out.code, 0, "{}", out.combined());
+    let stdout = norm(&out.stdout);
+    assert!(stdout.contains("first-insert=1\n"), "{stdout}");
+    assert!(
+        stdout.contains("count=1\n"),
+        "persisted before reopen: {stdout}"
+    );
+    assert!(
+        stdout.contains("busy=err:execute: database is locked"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("|fast=true\n"),
+        "busy timeout must be bounded: {stdout}"
+    );
+    assert!(stdout.contains("busy-retry=1\n"), "{stdout}");
+    assert!(stdout.contains("final=2\n"), "{stdout}");
+    assert!(stdout.contains("readonly-open=ok"), "{stdout}");
+    assert!(stdout.contains("readonly-write=err:"), "{stdout}");
+    assert!(stdout.contains("readonly"), "{stdout}");
+    assert!(
+        out.stderr.contains("live allocations: 0"),
+        "{}",
+        out.combined()
+    );
+    let _ = std::process::Command::new("cmd")
+        .args(["/c", "attrib", "-R", readonly.to_string_lossy().as_ref()])
+        .output();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn db_web_app_e2e() {
+    use std::io::Read;
+
+    let dir = temp_dir("db-web-app");
+    let (mut child, port, mut reader) =
+        match spawn_example_server(&dir, "web_database_app.blm", "web_database_app") {
+            Some(v) => v,
+            None => return,
+        };
+
+    let r1 = raw_request(port, "GET", "/", None, b"");
+    let (head1, body1) = split_http_response(&r1);
+    assert!(head1.starts_with("HTTP/1.1 200 OK\r\n"), "{head1}");
+    let page1 = String::from_utf8_lossy(&body1);
+    assert!(page1.contains("Notizen (0)"), "{page1}");
+    assert!(
+        page1.contains("<form method=\"post\" action=\"/add\">"),
+        "{page1}"
+    );
+
+    let r2 = raw_request(
+        port,
+        "POST",
+        "/add",
+        Some("application/x-www-form-urlencoded"),
+        b"text=Hallo+%3Cb%3EWelt%3C%2Fb%3E",
+    );
+    let (head2, body2) = split_http_response(&r2);
+    assert!(head2.starts_with("HTTP/1.1 200 OK\r\n"), "{head2}");
+    let page2 = String::from_utf8_lossy(&body2);
+    assert!(page2.contains("Notizen (1)"), "{page2}");
+    assert!(page2.contains("Hallo &lt;b&gt;Welt&lt;/b&gt;"), "{page2}");
+    assert!(
+        !page2.contains("<b>Welt</b>"),
+        "template must escape: {page2}"
+    );
+
+    let r3 = raw_request(
+        port,
+        "POST",
+        "/add",
+        Some("application/x-www-form-urlencoded"),
+        b"text=%27%29%3B+DROP+TABLE+notes%3B+--",
+    );
+    let (head3, body3) = split_http_response(&r3);
+    assert!(head3.starts_with("HTTP/1.1 200 OK\r\n"), "{head3}");
+    let page3 = String::from_utf8_lossy(&body3);
+    assert!(page3.contains("Notizen (2)"), "{page3}");
+    assert!(page3.contains("&#39;); DROP TABLE notes; --"), "{page3}");
+
+    let r4 = raw_request(port, "POST", "/add", Some("application/json"), b"text=nope");
+    let (head4, _) = split_http_response(&r4);
+    assert!(head4.starts_with("HTTP/1.1 400 "), "{head4}");
+
+    let r5 = raw_request(port, "GET", "/", None, b"");
+    let (head5, body5) = split_http_response(&r5);
+    assert!(head5.starts_with("HTTP/1.1 200 OK\r\n"), "{head5}");
+    let page5 = String::from_utf8_lossy(&body5);
+    assert!(
+        page5.contains("Notizen (2)"),
+        "table must still exist: {page5}"
+    );
+    assert!(page5.contains("Hallo &lt;b&gt;Welt&lt;/b&gt;"), "{page5}");
+    assert!(page5.contains("&#39;); DROP TABLE notes; --"), "{page5}");
+
+    let status = child.wait().expect("wait");
+    let mut rest = String::new();
+    reader.read_to_string(&mut rest).expect("rest");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("stderr read");
+    assert_eq!(status.code(), Some(0), "{rest}\n{stderr}");
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    assert!(stderr.contains("live sockets: 0"), "{stderr}");
+    assert!(
+        !dir.join("bloom_webapp_demo").exists(),
+        "demo dir must be removed"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn db_examples_natively() {
+    let dir = temp_dir("db-examples");
+    let cases: &[(&str, &[&str])] = &[
+        ("db_open.blm", &["Zeilen: 1"]),
+        (
+            "db_prepared.blm",
+            &["i=9007199254740991", "n-type=null", "unbound-null=true"],
+        ),
+        ("db_query.blm", &["1: [erste]", "3: NULL", "rows=3"]),
+        (
+            "db_transactions.blm",
+            &[
+                "nach-rollback=0",
+                "nested-begin=begin:",
+                "commit-ohne-tx=commit:",
+            ],
+        ),
+        ("db_blob.blm", &["hex=4100420043"]),
+        (
+            "db_errors.blm",
+            &[
+                "syntax=err:prepare:",
+                "duplicate-exec=err:execute: UNIQUE constraint failed",
+                "directory=err:open:",
+            ],
+        ),
+    ];
+    for (name, needles) in cases {
+        let stem = name.trim_end_matches(".blm");
+        let exe = dir.join(if cfg!(windows) {
+            format!("{stem}.exe")
+        } else {
+            stem.to_string()
+        });
+        let build = run_bloom(&[
+            "build",
+            &example(name),
+            "-o",
+            exe.to_string_lossy().as_ref(),
+        ]);
+        if no_toolchain(&build) {
+            eprintln!("skipping: no C toolchain available");
+            return;
+        }
+        assert_eq!(build.code, 0, "{}", build.combined());
+        let out = Command::new(&exe)
+            .env("BLOOM_MEM_REPORT", "1")
+            .current_dir(&dir)
+            .output()
+            .expect("run example");
+        let stdout = norm(&String::from_utf8_lossy(&out.stdout));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{name}: {stdout}\n{stderr}");
+        for needle in *needles {
+            assert!(
+                stdout.contains(needle),
+                "{name}: missing `{needle}` in {stdout}"
+            );
+        }
+        assert!(stderr.contains("live allocations: 0"), "{name}: {stderr}");
+    }
+    assert!(
+        !dir.join("bloom_db_demo").exists(),
+        "db_open demo dir left behind"
+    );
+    assert!(
+        !dir.join("bloom_db_blob_demo").exists(),
+        "db_blob demo dir left behind"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn web_session_registered_natively() {
+    let dir = temp_dir("web-session-registered");
+    let src = r#"use std::web;
+use std::http;
+use std::time;
+
+fn make(headers: string) -> http::HttpRequest {
+    return http::HttpRequest { method: "GET", target: "/", version: "HTTP/1.1", headers: headers, body: "" };
+}
+
+fn load(store: web::SessionStore, header: string) -> string {
+    return match web::cookies(make(header)) {
+        Result::Ok(cookies) => load_cookies(store, cookies),
+        Result::Err(e) => "cookies-error"
+    };
+}
+
+fn load_cookies(store: web::SessionStore, cookies: web::Cookies) -> string {
+    return match web::session_load(store, cookies, "sid") {
+        Result::Ok(session) => "ok",
+        Result::Err(e) => "err"
+    };
+}
+
+fn main() -> int {
+    match web::session_store(4, 60) {
+        Result::Ok(store) => live_case(store),
+        Result::Err(e) => println("store-err: " + e)
+    };
+    match web::session_store(4, 1) {
+        Result::Ok(store) => expiry_case(store),
+        Result::Err(e) => println("store-err: " + e)
+    };
+    return 0;
+}
+
+fn live_case(store: web::SessionStore) -> void {
+    match web::session_new(store) {
+        Result::Ok(session) => destroy_case(store, session),
+        Result::Err(e) => println("new-err: " + e)
+    };
+}
+
+fn destroy_case(store: web::SessionStore, session: web::Session) -> void {
+    let id = web::session_id(session);
+    println("registered-before=" + str(web::session_registered(store, session)));
+    println("destroy=" + str(web::session_destroy(store, session)));
+    println("registered-after=" + str(web::session_registered(store, session)));
+    println("load-after=" + load(store, "Cookie: sid=" + id));
+    println("count-after=" + str(web::session_count(store)));
+}
+
+fn expiry_case(store: web::SessionStore) -> void {
+    match web::session_new(store) {
+        Result::Ok(session) => wait_expiry(store, session),
+        Result::Err(e) => println("new-err: " + e)
+    };
+}
+
+fn wait_expiry(store: web::SessionStore, session: web::Session) -> void {
+    println("registered-live=" + str(web::session_registered(store, session)));
+    time::sleep_ms(1200);
+    println("registered-expired=" + str(web::session_registered(store, session)));
+    println("expire-after=" + str(web::session_expire(store)));
+    println("count-expired=" + str(web::session_count(store)));
+}
+"#;
+    let file = dir.join("main.blm");
+    write_file(&file, src);
+    let out = run_bloom_env(
+        &["run", file.to_string_lossy().as_ref()],
+        &[("BLOOM_MEM_REPORT", "1")],
+    );
+    if no_toolchain(&out) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(out.code, 0, "{}", out.combined());
+    let stdout = norm(&out.stdout);
+    assert!(stdout.contains("registered-before=true\n"), "{stdout}");
+    assert!(stdout.contains("destroy=true\n"), "{stdout}");
+    assert!(stdout.contains("registered-after=false\n"), "{stdout}");
+    assert!(stdout.contains("load-after=err\n"), "{stdout}");
+    assert!(stdout.contains("count-after=0\n"), "{stdout}");
+    assert!(stdout.contains("registered-live=true\n"), "{stdout}");
+    assert!(
+        stdout.contains("registered-expired=false\n"),
+        "expired sessions are not valid identities: {stdout}"
+    );
+    assert!(stdout.contains("count-expired=0\n"), "{stdout}");
+    assert!(
+        out.stderr.contains("live allocations: 0"),
+        "{}",
+        out.combined()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

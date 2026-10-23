@@ -2981,6 +2981,30 @@ bool bloom_web_session_destroy(
     return false;
 }
 
+/*
+ * True while the session object is still registered in the store. A handle
+ * that outlived `session_destroy`/expiry keeps its data but is no longer a
+ * valid server-side identity; applications can use this to check a cached
+ * handle before trusting it. The store is the only source of truth.
+ */
+bool bloom_web_session_registered(
+    bloom_struct_std_web_SessionStore store,
+    bloom_struct_std_web_Session session
+) {
+    bloom_web_session_store *s = bloom_web_store_unwrap(store);
+    bloom_web_session *target = bloom_web_session_unwrap(session);
+    if (s == NULL || target == NULL) {
+        return false;
+    }
+    bloom_web_store_purge(s);
+    for (size_t i = 0; i < s->count; i++) {
+        if (s->items[i] == target) {
+            return true;
+        }
+    }
+    return false;
+}
+
 int64_t bloom_web_session_expire(bloom_struct_std_web_SessionStore store) {
     bloom_web_session_store *s = bloom_web_store_unwrap(store);
     if (s == NULL) {

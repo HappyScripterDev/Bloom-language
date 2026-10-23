@@ -1,0 +1,50 @@
+// Ergebnismengen lesen: mehrere Zeilen, Spalten per Index und Name,
+// NULL von leerem Text unterscheiden.
+use std::db;
+
+fn run() -> Result<int, string> {
+    let database = db::open_memory()?;
+    let create = db::prepare(database, "CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)")?;
+    db::execute(create)?;
+
+    let insert = db::prepare(database, "INSERT INTO notes (text) VALUES (?1)")?;
+    db::bind_text(insert, 1, "erste")?;
+    db::execute(insert)?;
+    db::reset(insert)?;
+    db::bind_text(insert, 1, "")?;
+    db::execute(insert)?;
+    db::reset(insert)?;
+    db::bind_null(insert, 1)?;
+    db::execute(insert)?;
+
+    let query = db::prepare(database, "SELECT id, text FROM notes ORDER BY id")?;
+    println("columns=" + str(db::column_count(query)));
+    println("name0=" + db::column_name(query, 0)?);
+    println("index-text=" + str(db::column_index(query, "text")?));
+
+    var rows = 0;
+    while db::step(query)? {
+        let id = db::column_int(query, 0)?;
+        let kind = db::column_type(query, 1)?;
+        if kind == "null" {
+            println(str(id) + ": NULL");
+        } else {
+            println(str(id) + ": [" + db::column_text(query, 1)? + "]");
+        }
+        rows = rows + 1;
+    }
+    println("rows=" + str(rows));
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}

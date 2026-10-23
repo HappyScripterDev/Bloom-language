@@ -224,6 +224,19 @@ irgendein Handle es hält. `session_destroy` und `session_expire` geben
 nur die Store-Referenz frei; Freigabe erfolgt erst, wenn der letzte
 Handle den Scope verlässt. `session_new` legt zwei Referenzen an (Store
 plus Rückgabewert), `session_load` erhöht den Zähler um eins.
+**Datenbank-Handles (`std::db`, `Type::Db`/`Type::Stmt`) sind ebenfalls
+referenzgezählt.** Ein `Statement` hält eine Besitzreferenz auf seine
+`Database`; die SQLite-Verbindung wird erst geschlossen, wenn sowohl
+das Bloom-`Database`-Handle als auch alle daraus abgeleiteten
+Statements freigegeben sind. Ein Statement darf daher die ursprüngliche
+`Database`-Variable überleben (getestet: `detached_select`). Beim
+Freigeben eines Statements wird `sqlite3_finalize` aufgerufen, beim
+Freigeben der letzten Datenbankreferenz `sqlite3_close_v2` (eine offene
+Transaktion wird dabei zurückgerollt). Fehler beim Präparieren, Binden
+oder Ausführen geben die beteiligten Teilressourcen sofort frei;
+abgelehnte SQL-Texte (mehrere Anweisungen, NUL-Bytes) finalisieren das
+bereits erzeugte Statement. Alle DB-Tests prüfen
+`live allocations: 0`.
 Alle Stdlib-Tests
 laufen unter `BLOOM_MEM_REPORT=1`. Getestet wird nativ mit MSVC
 (Windows). Valgrind/ASan sind auf dieser Toolchain nicht verfügbar und

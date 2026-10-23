@@ -110,6 +110,10 @@ pub enum Type {
     SessionStore,
     /// Internal handle to a server-side session (`std::web::Session`).
     Session,
+    /// Internal handle to an open SQLite database (`std::db::Database`).
+    Db,
+    /// Internal handle to a prepared SQLite statement (`std::db::Statement`).
+    Stmt,
 }
 
 impl Type {
@@ -180,6 +184,8 @@ pub fn mangle_type(ty: &Type) -> String {
         Type::Cookies => "cookies".to_string(),
         Type::SessionStore => "session_store".to_string(),
         Type::Session => "session".to_string(),
+        Type::Db => "db".to_string(),
+        Type::Stmt => "stmt".to_string(),
         Type::Param(name) => c_ident(name),
     }
 }
@@ -204,6 +210,8 @@ impl fmt::Display for Type {
             Type::Cookies => write!(f, "std::web::Cookies"),
             Type::SessionStore => write!(f, "std::web::SessionStore"),
             Type::Session => write!(f, "std::web::Session"),
+            Type::Db => write!(f, "std::db::Database"),
+            Type::Stmt => write!(f, "std::db::Statement"),
             Type::Struct(name, args) => {
                 if args.is_empty() {
                     write!(f, "{}", name)
@@ -238,6 +246,14 @@ mod tests {
     #[test]
     fn form_type_is_named_like_the_other_managed_handles() {
         assert_eq!(Type::Form.to_string().split("::").last(), Some("FormData"));
+    }
+
+    #[test]
+    fn database_types_are_displayed_and_mangled() {
+        assert_eq!(Type::Db.to_string(), "std::db::Database");
+        assert_eq!(Type::Stmt.to_string(), "std::db::Statement");
+        assert_eq!(mangle_type(&Type::Db), "db");
+        assert_eq!(mangle_type(&Type::Stmt), "stmt");
     }
 
     #[test]

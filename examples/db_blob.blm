@@ -1,0 +1,51 @@
+// BLOBs mit Nullbytes speichern und wieder lesen.
+// Der Inhalt wird zusätzlich über SQLite als Hex ausgegeben, damit die
+// Bytes exakt nachvollziehbar sind.
+use std::db;
+use std::fs;
+
+fn run() -> Result<int, string> {
+    let dir = "bloom_db_blob_demo";
+    let file = fs::join_path(dir, "roh.bin");
+    fs::create_dir_all(dir)?;
+    fs::write_text(file, "A\u{0}B\u{0}C")?;
+    let bytes = fs::read_bytes(file)?;
+    println("gelesen=" + str(fs::bytes_len(bytes)));
+
+    let database = db::open_memory()?;
+    let create = db::prepare(database, "CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)")?;
+    db::execute(create)?;
+    let insert = db::prepare(database, "INSERT INTO blobs (data) VALUES (?1)")?;
+    db::bind_bytes(insert, 1, bytes)?;
+    db::execute(insert)?;
+    show_blob(database)?;
+
+    fs::remove_file(file)?;
+    fs::remove_dir(dir)?;
+    return Result::Ok(0);
+}
+
+fn show_blob(database: db::Database) -> Result<int, string> {
+    let query = db::prepare(database, "SELECT data, length(data), hex(data) FROM blobs")?;
+    let has_row = db::step(query)?;
+    if !has_row {
+        return Result::Err("keine Zeile");
+    }
+    let data = db::column_bytes(query, 0)?;
+    println("blob=" + str(fs::bytes_len(data)));
+    println("length=" + str(db::column_int(query, 1)?));
+    println("hex=" + db::column_text(query, 2)?);
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}

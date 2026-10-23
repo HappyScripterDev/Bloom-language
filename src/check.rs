@@ -1179,6 +1179,9 @@ impl Checker {
                 Some(crate::modules::BuiltinModule::Html) => {
                     self.register_html_functions(&m.name);
                 }
+                Some(crate::modules::BuiltinModule::Db) => {
+                    self.register_db_functions(&m.name);
+                }
                 Some(crate::modules::BuiltinModule::Win32) => {
                     if cfg!(windows) {
                         self.register_win32_functions(&m.name);
@@ -1951,8 +1954,14 @@ impl Checker {
             (
                 "csrf_clear",
                 "bloom_web_csrf_clear",
-                vec![session_ty],
+                vec![session_ty.clone()],
                 Type::Void,
+            ),
+            (
+                "session_registered",
+                "bloom_web_session_registered",
+                vec![store_ty, session_ty],
+                Type::Bool,
             ),
         ];
         for (name, c_name, params, ret) in defs {
@@ -2035,6 +2044,197 @@ impl Checker {
                 "bloom_html_template_file_from",
                 vec![Type::String, Type::String],
                 str_err(template_ty.clone()),
+            ),
+        ];
+        for (name, c_name, params, ret) in defs {
+            self.register_builtin_fn(module, name, c_name, params, ret);
+        }
+    }
+
+    fn register_db_functions(&mut self, module: &str) {
+        // BLOB columns use the managed std::fs::Bytes buffer, so the fs
+        // runtime and its struct must exist as well.
+        self.register_fs_functions("std::fs");
+        let span = Span::point(1, 1);
+        for (name, ty) in [("Database", Type::Db), ("Statement", Type::Stmt)] {
+            let canonical = format!("{}::{}", module, name);
+            self.structs.entry(canonical).or_insert_with(|| StructInfo {
+                params: Vec::new(),
+                fields: vec![StructField {
+                    name: "id".to_string(),
+                    ty,
+                }],
+                span,
+                module: module.to_string(),
+                is_pub: true,
+            });
+        }
+        let db_ty = Type::Struct(format!("{}::Database", module), Vec::new());
+        let stmt_ty = Type::Struct(format!("{}::Statement", module), Vec::new());
+        let bytes_ty = Type::Struct("std::fs::Bytes".to_string(), Vec::new());
+        let str_err = |ok: Type| Type::Enum("Result".to_string(), vec![ok, Type::String]);
+        let defs: Vec<(&str, &str, Vec<Type>, Type)> = vec![
+            (
+                "open",
+                "bloom_db_open",
+                vec![Type::String],
+                str_err(db_ty.clone()),
+            ),
+            (
+                "open_memory",
+                "bloom_db_open_memory",
+                vec![],
+                str_err(db_ty.clone()),
+            ),
+            (
+                "busy_timeout",
+                "bloom_db_busy_timeout",
+                vec![db_ty.clone(), Type::Int],
+                str_err(Type::Bool),
+            ),
+            (
+                "prepare",
+                "bloom_db_prepare",
+                vec![db_ty.clone(), Type::String],
+                str_err(stmt_ty.clone()),
+            ),
+            (
+                "bind_null",
+                "bloom_stmt_bind_null",
+                vec![stmt_ty.clone(), Type::Int],
+                str_err(Type::Bool),
+            ),
+            (
+                "bind_int",
+                "bloom_stmt_bind_int",
+                vec![stmt_ty.clone(), Type::Int, Type::Int],
+                str_err(Type::Bool),
+            ),
+            (
+                "bind_float",
+                "bloom_stmt_bind_float",
+                vec![stmt_ty.clone(), Type::Int, Type::Float],
+                str_err(Type::Bool),
+            ),
+            (
+                "bind_bool",
+                "bloom_stmt_bind_bool",
+                vec![stmt_ty.clone(), Type::Int, Type::Bool],
+                str_err(Type::Bool),
+            ),
+            (
+                "bind_text",
+                "bloom_stmt_bind_text",
+                vec![stmt_ty.clone(), Type::Int, Type::String],
+                str_err(Type::Bool),
+            ),
+            (
+                "bind_bytes",
+                "bloom_stmt_bind_bytes",
+                vec![stmt_ty.clone(), Type::Int, bytes_ty.clone()],
+                str_err(Type::Bool),
+            ),
+            (
+                "step",
+                "bloom_stmt_step",
+                vec![stmt_ty.clone()],
+                str_err(Type::Bool),
+            ),
+            (
+                "execute",
+                "bloom_stmt_execute",
+                vec![stmt_ty.clone()],
+                str_err(Type::Int),
+            ),
+            (
+                "reset",
+                "bloom_stmt_reset",
+                vec![stmt_ty.clone()],
+                str_err(Type::Bool),
+            ),
+            (
+                "column_count",
+                "bloom_stmt_column_count",
+                vec![stmt_ty.clone()],
+                Type::Int,
+            ),
+            (
+                "column_name",
+                "bloom_stmt_column_name",
+                vec![stmt_ty.clone(), Type::Int],
+                str_err(Type::String),
+            ),
+            (
+                "column_index",
+                "bloom_stmt_column_index",
+                vec![stmt_ty.clone(), Type::String],
+                str_err(Type::Int),
+            ),
+            (
+                "column_type",
+                "bloom_stmt_column_type",
+                vec![stmt_ty.clone(), Type::Int],
+                str_err(Type::String),
+            ),
+            (
+                "column_int",
+                "bloom_stmt_column_int",
+                vec![stmt_ty.clone(), Type::Int],
+                str_err(Type::Int),
+            ),
+            (
+                "column_float",
+                "bloom_stmt_column_float",
+                vec![stmt_ty.clone(), Type::Int],
+                str_err(Type::Float),
+            ),
+            (
+                "column_bool",
+                "bloom_stmt_column_bool",
+                vec![stmt_ty.clone(), Type::Int],
+                str_err(Type::Bool),
+            ),
+            (
+                "column_text",
+                "bloom_stmt_column_text",
+                vec![stmt_ty.clone(), Type::Int],
+                str_err(Type::String),
+            ),
+            (
+                "column_bytes",
+                "bloom_stmt_column_bytes",
+                vec![stmt_ty.clone(), Type::Int],
+                str_err(bytes_ty),
+            ),
+            (
+                "changes",
+                "bloom_db_changes",
+                vec![db_ty.clone()],
+                Type::Int,
+            ),
+            (
+                "last_insert_rowid",
+                "bloom_db_last_insert_rowid",
+                vec![db_ty.clone()],
+                Type::Int,
+            ),
+            (
+                "begin",
+                "bloom_db_begin",
+                vec![db_ty.clone()],
+                str_err(Type::Bool),
+            ),
+            (
+                "commit",
+                "bloom_db_commit",
+                vec![db_ty.clone()],
+                str_err(Type::Bool),
+            ),
+            (
+                "rollback",
+                "bloom_db_rollback",
+                vec![db_ty.clone()],
+                str_err(Type::Bool),
             ),
         ];
         for (name, c_name, params, ret) in defs {

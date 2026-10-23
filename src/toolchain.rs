@@ -106,13 +106,14 @@ impl Toolchain {
         c_name: &str,
         exe_name: &str,
         links: &[LinkItem],
+        extra_sources: &[String],
     ) -> Result<PathBuf, String> {
         match self {
             Toolchain::Msvc { vcvars, .. } => {
-                compile_msvc(vcvars, workdir, c_name, exe_name, links)
+                compile_msvc(vcvars, workdir, c_name, exe_name, links, extra_sources)
             }
             Toolchain::GnuLike { exe, kind } => {
-                compile_gnu(exe, *kind, workdir, c_name, exe_name, links)
+                compile_gnu(exe, *kind, workdir, c_name, exe_name, links, extra_sources)
             }
         }
     }
@@ -141,6 +142,7 @@ fn compile_msvc(
     c_name: &str,
     exe_name: &str,
     links: &[LinkItem],
+    extra_sources: &[String],
 ) -> Result<PathBuf, String> {
     let bat_path = workdir.join("bloom_build.bat");
     let mut link_args = String::new();
@@ -149,11 +151,24 @@ fn compile_msvc(
         link_args.push(' ');
         link_args.push_str(&bat_arg(&arg)?);
     }
+    let mut sources = String::from(c_name);
+    let mut defines = String::new();
+    if !extra_sources.is_empty() {
+        // Extra translation units are the vendored SQLite amalgamation;
+        // build it without threads, without extension loading and with
+        // double-quoted string literals disabled.
+        defines.push_str("/DSQLITE_THREADSAFE=0 /DSQLITE_OMIT_LOAD_EXTENSION /DSQLITE_DQS=0 ");
+        for source in extra_sources {
+            sources.push(' ');
+            sources.push_str(&bat_arg(source)?);
+        }
+    }
     let bat = format!(
-        "@echo off\r\ncall \"{}\" >nul 2>&1\r\ncl /nologo /std:c17 /utf-8 /O2 /Fe:{} {}{}\r\n",
+        "@echo off\r\ncall \"{}\" >nul 2>&1\r\ncl /nologo /std:c17 /utf-8 /O2 {}{} /Fe:{} {}\r\n",
         vcvars.display(),
+        defines,
+        sources,
         exe_name,
-        c_name,
         link_args
     );
     std::fs::write(&bat_path, bat).map_err(|e| format!("could not write build script: {}", e))?;
@@ -180,13 +195,24 @@ fn compile_gnu(
     c_name: &str,
     exe_name: &str,
     links: &[LinkItem],
+    extra_sources: &[String],
 ) -> Result<PathBuf, String> {
     let mut cmd = Command::new(exe);
     cmd.current_dir(workdir);
+    if !extra_sources.is_empty() {
+        cmd.args([
+            "-DSQLITE_THREADSAFE=0",
+            "-DSQLITE_OMIT_LOAD_EXTENSION",
+            "-DSQLITE_DQS=0",
+        ]);
+    }
     if kind == GnuKind::Tcc {
         cmd.args(["-o", exe_name, c_name]);
     } else {
         cmd.args(["-O2", "-o", exe_name, c_name, "-lm"]);
+    }
+    for source in extra_sources {
+        cmd.arg(source);
     }
     for item in links {
         for arg in item.gnu_args() {

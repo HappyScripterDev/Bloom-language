@@ -708,6 +708,68 @@ Beispiele: `examples/web_cookies.blm`, `examples/web_session_basic.blm`,
 `examples/web_session_expiry.blm`, `examples/web_csrf_form.blm`,
 `examples/web_session_errors.blm`.
 
+## 16c. Datenbanken (SQLite)
+
+SQLite ist eingebaut. Du installierst nichts und startest keinen
+Server; `std::db` öffnet einfach eine Datei (oder `:memory:`).
+
+```bloom
+use std::db;
+
+fn run() -> Result<int, string> {
+    let database = db::open("notizen.db")?;
+    let create = db::prepare(database,
+        "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text TEXT)")?;
+    db::execute(create)?;
+
+    // Werte immer binden, nie in den SQL-Text kleben
+    let insert = db::prepare(database, "INSERT INTO notes (text) VALUES (?1)")?;
+    db::bind_text(insert, 1, "Erste Notiz")?;
+    println("neu: " + str(db::execute(insert)?));
+    println("id: " + str(db::last_insert_rowid(database)));
+
+    // Lesen: step liefert true, solange Zeilen kommen
+    let query = db::prepare(database, "SELECT id, text FROM notes ORDER BY id")?;
+    while db::step(query)? {
+        println(str(db::column_int(query, 0)?) + ": " + db::column_text(query, 1)?);
+    }
+    return Result::Ok(0);
+}
+```
+
+Wichtig:
+
+- **Bind-Indizes beginnen bei 1** (`?1` ist Index 1). **Spaltenindizes
+  beginnen bei 0**. Das ist SQLite und bleibt so.
+- Ein Statement muss `reset` bekommen, bevor du es erneut bindest oder
+  ausführst. `reset` löscht auch alle Bindungen.
+- `execute` ist für Anweisungen ohne Ergebnis (INSERT, UPDATE, CREATE)
+  und liefert die Zahl geänderter Zeilen. Für SELECT nimmst du `step`.
+- Spalten werden **strikt** gelesen: `column_text` akzeptiert nur TEXT,
+  `column_int` nur INTEGER. `column_type` sagt dir vorher, was da ist
+  (`"null"`, `"integer"`, `"float"`, `"text"`, `"blob"`). Ein BLOB kommt
+  als `fs::Bytes` zurück, NUL-Bytes inklusive.
+- Transaktionen: `db::begin`, `db::commit`, `db::rollback`. Kein
+  verschachteltes BEGIN (das ist ein Fehler, keine Savepoints).
+- `db::busy_timeout(db, ms)` ändert, wie lange bei einer gesperrten
+  Datenbank gewartet wird (Standard 5000 ms, maximal 60000 ms).
+
+Wenn ein SQLite-Programm gebaut wird, kompiliert Bloom die eingebettete
+Amalgamation automatisch mit. Bei `bloom build --emit-c` werden
+`sqlite3.c` und `sqlite3.h` zusätzlich neben die C-Datei geschrieben.
+SQLite ist Public Domain; Version und Herkunft stehen in
+`runtime/sqlite3_NOTICE.md`.
+
+Beispiele: `examples/db_open.blm`, `examples/db_prepared.blm`,
+`examples/db_query.blm`, `examples/db_transactions.blm`,
+`examples/db_blob.blm`, `examples/db_errors.blm` und die kleine
+Webanwendung `examples/web_database_app.blm`.
+
+Sessions: `web::session_registered(store, session)` sagt, ob ein
+Session-Handle noch im Store gilt. Nach `destroy` oder Ablauf ist es
+`false`; die Daten am Handle bleiben lesbar, sind aber keine gültige
+Identität mehr.
+
 ## 17. HTTPS
 
 ```bloom

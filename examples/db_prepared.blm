@@ -1,0 +1,46 @@
+// Prepared Statements: alle unterstützten Typen binden und wieder lesen.
+use std::db;
+
+fn run() -> Result<int, string> {
+    let database = db::open_memory()?;
+    let create = db::prepare(database, "CREATE TABLE werte (id INTEGER PRIMARY KEY, i INTEGER, f REAL, b INTEGER, s TEXT, n TEXT)")?;
+    db::execute(create)?;
+
+    let insert = db::prepare(database, "INSERT INTO werte (i, f, b, s, n) VALUES (?1, ?2, ?3, ?4, ?5)")?;
+    db::bind_int(insert, 1, 9007199254740991)?;
+    db::bind_float(insert, 2, 2.5)?;
+    db::bind_bool(insert, 3, true)?;
+    db::bind_text(insert, 4, "Grüße, Bloom")?;
+    db::bind_null(insert, 5)?;
+    println("insert changes=" + str(db::execute(insert)?));
+
+    let query = db::prepare(database, "SELECT i, f, b, s, n FROM werte")?;
+    let has_row = db::step(query)?;
+    if !has_row {
+        return Result::Err("keine Zeile");
+    }
+    println("i=" + str(db::column_int(query, 0)?));
+    println("f=" + str(db::column_float(query, 1)?));
+    println("b=" + str(db::column_bool(query, 2)?));
+    println("s=" + db::column_text(query, 3)?);
+    println("n-type=" + db::column_type(query, 4)?);
+    println("done=" + str(db::step(query)?));
+
+    // Ungebundene Parameter sind in SQLite NULL (kein Fehler).
+    let empty = db::prepare(database, "SELECT ?1 IS NULL")?;
+    db::step(empty)?;
+    println("unbound-null=" + str(db::column_bool(empty, 0)?));
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}

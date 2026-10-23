@@ -1387,6 +1387,7 @@ if m.status == 200 {
 | `csrf_check(session, token)` | `Session, string -> bool` |
 | `csrf_rotate(session)` | `Session -> Result<string, string>` |
 | `csrf_clear(session)` | `Session -> void` |
+| `session_registered(store, session)` | `SessionStore, Session -> bool` |
 
 ```bloom
 pub struct Router { id }   // undurchsichtiges, verwaltetes Handle
@@ -1574,8 +1575,17 @@ pub struct CookieOptions {
   berechnet; ein Sprung der Systemuhr verlängert oder verkürzt nichts.
   `session_count` liefert die Zahl der aktuell gespeicherten Einträge
   (abgelaufene werden bei `session_new`, `session_load` und
-  `session_expire` entfernt). Sessions gehen beim Prozessende verloren;
-  einen verteilten Store gibt es nicht.
+  `session_expire` entfernt). `session_registered(store, session)`
+  beantwortet, ob ein Handle noch **im Store registriert** ist:
+  `true` nur für lebende, nicht abgelaufene Sessions. Nach
+  `session_destroy` oder Ablauf liefert es `false`, auch wenn das
+  Handle seine Daten noch hält. Ein Handle ist damit ein Datenobjekt,
+  keine Gültigkeitsbescheinigung: Für jede Anfrage muss die Anwendung
+  den Cookie erneut mit `session_load` auflösen. Ein nicht mehr
+  registriertes Handle kann nicht wieder in den Store eingefügt werden
+  (eine solche Funktion gibt es nicht); `session_new` erzeugt immer
+  eine neue Kennung. Sessions gehen beim Prozessende verloren; einen
+  verteilten Store gibt es nicht.
 - **Session-Cookies:** `session_cookie(session, name, max_age)` erzeugt
   eine `Set-Cookie`-Zeile mit `Path=/`, `HttpOnly`, `Secure`,
   `SameSite=Lax`, `Max-Age=max_age` (1..31536000).
@@ -1683,6 +1693,128 @@ pub struct Template { id }   // undurchsichtiges, verwaltetes Handle
   `template_file:` bzw. `template_file_from:` und nennt den Pfad und
   den Grund.
 
+### 13.14 Standardmodul `std::db` (SQLite)
+
+```bloom
+use std::db;
+
+let database = db::open("app.db")?;
+let stmt = db::prepare(database, "INSERT INTO notes (text) VALUES (?1)")?;
+db::bind_text(stmt, 1, "Hallo")?;
+db::execute(stmt)?;
+```
+
+| Funktion | Signatur |
+| --- | --- |
+| `open(path)` | `string -> Result<Database, string>` |
+| `open_memory()` | `() -> Result<Database, string>` |
+| `busy_timeout(database, ms)` | `Database, int -> Result<bool, string>` |
+| `prepare(database, sql)` | `Database, string -> Result<Statement, string>` |
+| `bind_null(stmt, index)` | `Statement, int -> Result<bool, string>` |
+| `bind_int(stmt, index, value)` | `Statement, int, int -> Result<bool, string>` |
+| `bind_float(stmt, index, value)` | `Statement, int, float -> Result<bool, string>` |
+| `bind_bool(stmt, index, value)` | `Statement, int, bool -> Result<bool, string>` |
+| `bind_text(stmt, index, value)` | `Statement, int, string -> Result<bool, string>` |
+| `bind_bytes(stmt, index, value)` | `Statement, int, fs::Bytes -> Result<bool, string>` |
+| `step(stmt)` | `Statement -> Result<bool, string>` |
+| `execute(stmt)` | `Statement -> Result<int, string>` |
+| `reset(stmt)` | `Statement -> Result<bool, string>` |
+| `column_count(stmt)` | `Statement -> int` |
+| `column_name(stmt, index)` | `Statement, int -> Result<string, string>` |
+| `column_index(stmt, name)` | `Statement, string -> Result<int, string>` |
+| `column_type(stmt, index)` | `Statement, int -> Result<string, string>` |
+| `column_int(stmt, index)` | `Statement, int -> Result<int, string>` |
+| `column_float(stmt, index)` | `Statement, int -> Result<float, string>` |
+| `column_bool(stmt, index)` | `Statement, int -> Result<bool, string>` |
+| `column_text(stmt, index)` | `Statement, int -> Result<string, string>` |
+| `column_bytes(stmt, index)` | `Statement, int -> Result<fs::Bytes, string>` |
+| `changes(database)` | `Database -> int` |
+| `last_insert_rowid(database)` | `Database -> int` |
+| `begin(database)` / `commit(database)` / `rollback(database)` | `Database -> Result<bool, string>` |
+
+```bloom
+pub struct Database { id }   // verwaltetes Handle
+pub struct Statement { id }  // verwaltetes Handle, hält die Datenbank am Leben
+```
+
+- **Engine:** eingebettetes **SQLite 3.54.1** (Amalgamation,
+  `runtime/sqlite3.c`/`.h`, Public Domain, siehe
+  `runtime/sqlite3_NOTICE.md`). Der Compiler schreibt die Amalgamation
+  bei Programmen mit `std::db` neben den generierten C-Code und
+  übersetzt sie als eigene Übersetzungseinheit mit
+  `SQLITE_THREADSAFE=0`, `SQLITE_OMIT_LOAD_EXTENSION` und
+  `SQLITE_DQS=0`. Kein separater Datenbankserver, keine Installation,
+  keine Netzwerk-Downloads zur Build- oder Laufzeit.
+- **Indizes:** Bind-Parameter sind **1-basiert** (`?1` = Index 1,
+  Bereich 1..`sqlite3_bind_parameter_count`). Spalten sind **0-basiert**
+  (Bereich 0..`column_count-1`). Beides entspricht SQLite und wird bei
+  Verletzung mit einem `Err` abgelehnt.
+- **Statement-Zustände:** `fresh` (nach `prepare` oder `reset`), `row`
+  (letzter `step` lieferte eine Zeile), `done` (letzter `step`/`execute`
+  ist fertig), `error` (letzter Aufruf schlug fehl). Binden ist nur in
+  `fresh` erlaubt; Spaltenzugriffe nur in `row`; `step` nur in
+  `fresh`/`row`; `execute` nur in `fresh`; `reset` ist aus jedem Zustand
+  erlaubt, setzt den Zustand auf `fresh` und löscht **alle Bindungen**.
+  Nach einem Fehler muss `reset` aufgerufen werden, bevor das Statement
+  weiterverwendet wird (auch nach `SQLITE_BUSY`, damit die implizite
+  Transaktion sauber beendet wird).
+- **`step` vs. `execute`:** `step` liefert `true`, wenn eine Zeile
+  bereitsteht, und `false`, wenn die Anweisung abgeschlossen ist.
+  `execute` ist für Anweisungen ohne Ergebnismenge und liefert
+  `sqlite3_changes`; taucht eine Zeile auf, ist das ein `Err` (Hinweis
+  auf `step`).
+- **Prepared Statements:** `prepare` akzeptiert **genau eine**
+  SQL-Anweisung; weitere Anweisungen (auch nach einem Semikolon) sind
+  ein Fehler. SQL mit eingebettetem NUL-Byte wird abgelehnt. Werte
+  werden ausschließlich über `bind_*` übergeben — es gibt keine
+  SQL-Stringinterpolation in Bloom und Parameter ersetzen keine
+  Tabellen- oder Spaltennamen.
+- **Typen:** `INTEGER` ist 64 Bit (`int`), `REAL` ist IEEE-754-Double
+  (`float`), `TEXT` ist UTF-8 (`string`, inklusive eingebetteter
+  NUL-Bytes), `BLOB` ist `fs::Bytes` (NUL-sicher, nie als C-String
+  interpretiert), `NULL` ist ein eigener Zustand. Die typisierten
+  Getter sind **strikt**: `column_int` akzeptiert nur INTEGER,
+  `column_text` nur TEXT, `column_bytes` nur BLOB, `column_bool` nur
+  INTEGER 0/1, `column_float` nur REAL. Eine falsche Zieltype ist ein
+  `Err` mit erwartetem und tatsächlichem Typ. `column_type` liefert
+  `"null"`, `"integer"`, `"float"`, `"text"` oder `"blob"`. `NULL`,
+  leerer String und fehlende Spalten sind dadurch unterscheidbar.
+  Ungebundene Parameter sind in SQLite `NULL` (kein Fehler).
+- **Spaltennamen:** `column_name`/`column_index` vergleichen exakt
+  (Groß-/Kleinschreibung zählt). `column_index` lehnt mehrdeutige
+  Namen (mehr als eine Spalte mit dem Namen) und unbekannte Namen ab.
+- **Transaktionen:** `begin`, `commit`, `rollback` sind explizit;
+  verschachteltes `begin` ist ein Fehler (SQLite-Savepoints werden
+  nicht angeboten). Ein offener Transaktionszustand wird beim
+  Freigeben der Datenbank zurückgerollt (`sqlite3_close_v2`).
+- **Ressourcen:** Ein `Statement` hält seine `Database` am Leben
+  (Referenzzählung); es darf die ursprüngliche Bloom-Variable
+  überleben. `Database`/`Statement` sind verwaltete Werte. Ein Fehler
+  beim Präparieren/Binden/Ausführen gibt alle Teilressourcen frei.
+- **Dateipfade:** `open` nimmt einen normalen Dateipfad (UTF-8,
+  Unicode und Leerzeichen funktionieren unter Windows). SQLite-URIs
+  werden nicht aktiviert; die Sonderdatei `:memory:` funktioniert, dafür
+  gibt es `open_memory`. Ein Verzeichnis oder ein nicht existierendes
+  Elternverzeichnis ist ein `Err`. Eine schreibgeschützte Datei lässt
+  sich öffnen; schreibende Anweisungen scheitern dann mit
+  `SQLITE_READONLY`.
+- **Betrieb:** Standard-Busy-Timeout 5000 ms, einstellbar mit
+  `busy_timeout` (0..60000 ms). Fehlertexte nennen die Operation, die
+  SQLite-Meldung und den SQLite-Code (z. B.
+  `execute: database is locked (SQLite code 5)`); SQL-Text und
+  Dateipfade werden nicht zusätzlich wiederholt. Keine automatischen
+  Wiederholungen.
+- **Grenzen:** SQL-Text höchstens `INT32_MAX` Bytes, Text/BLOB bis zur
+  SQLite-Grenze (1 GiB). Keine Threads; das Handle ist nicht für
+  parallele Nutzung ausgelegt. Kein ORM, keine Migrationen, keine
+  Connection-Pools, kein PostgreSQL/MySQL, keine asynchronen Zugriffe.
+- **Sicherheit:** Parametrisierte Abfragen sind der einzige
+  vorgesehene Weg für Werte. Dynamische Bezeichner (Tabellen- oder
+  Spaltennamen) müssen Anwendungen selbst aus einer festen Auswahl
+  wählen; sie lassen sich nicht binden. Datenbankinhalte sind
+  potenziell angreifbar und müssen beim Ausgeben weiterhin escaped
+  werden (HTML-Templates tun das automatisch).
+
 ## 14. Fehlerdiagnostik
 
 Format:
@@ -1776,7 +1908,7 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
 | 5 | Datei-/E/A-Fehler |
 | 70 | Laufzeitfehler im Bloom-Programm |
 
-## 16. Ausdrücklich nicht unterstützt (Version 0.15.0)
+## 16. Ausdrücklich nicht unterstützt (Version 0.18.0)
 
 - Referenzempfänger (`&self`/`&mut self`), `var self` auf Enums
 - Klassen, Vererbung, Interfaces
@@ -1807,6 +1939,8 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
   Passworthashes, Login-Frameworks, Rollen/Rechte, OAuth/OIDC, JWT,
   vollständige Middleware** (Sessions liegen nur im Speicher des
   Prozesses und sind keine Anmeldung)
+- **Datenbanken außer SQLite, ORMs, Schema-Migrationen,
+  Connection-Pools, asynchrone Datenbankzugriffe, Savepoints**
 - **C-Structs by value, Funktionszeiger/Callbacks, variadische
   C-Funktionen, Pointer-Arithmetik, Dereferenzierung von `rawptr`**
 - **UDP, asynchrone/Thread-Netzwerkoperationen, Threads allgemein**

@@ -1,0 +1,47 @@
+// Datenbankdatei öffnen, Tabelle anlegen, Zeile einfügen.
+// Die Demo-Datei wird am Ende wieder entfernt.
+use std::db;
+use std::fs;
+
+fn count_rows(database: db::Database) -> Result<int, string> {
+    let stmt = db::prepare(database, "SELECT count(*) FROM notes")?;
+    let has_row = db::step(stmt)?;
+    if !has_row {
+        return Result::Err("keine Zeile");
+    }
+    return db::column_int(stmt, 0);
+}
+
+fn create_and_insert(path: string) -> Result<int, string> {
+    let database = db::open(path)?;
+    let create = db::prepare(database, "CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)")?;
+    println("CREATE changes=" + str(db::execute(create)?));
+    let insert = db::prepare(database, "INSERT INTO notes (text) VALUES (?1)")?;
+    db::bind_text(insert, 1, "Hallo, SQLite")?;
+    println("INSERT changes=" + str(db::execute(insert)?));
+    println("rowid=" + str(db::last_insert_rowid(database)));
+    return count_rows(database);
+}
+
+fn run() -> Result<int, string> {
+    let dir = "bloom_db_demo";
+    let path = fs::join_path(dir, "demo.db");
+    fs::create_dir_all(dir)?;
+    let count = create_and_insert(path)?;
+    println("Zeilen: " + str(count));
+    fs::remove_file(path)?;
+    fs::remove_dir(dir)?;
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}

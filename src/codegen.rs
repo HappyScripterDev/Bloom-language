@@ -104,6 +104,8 @@ fn c_type(ty: &Type) -> String {
         Type::Cookies => "bloom_cookies_handle".to_string(),
         Type::SessionStore => "bloom_session_store_handle".to_string(),
         Type::Session => "bloom_session_handle".to_string(),
+        Type::Db => "bloom_db_handle".to_string(),
+        Type::Stmt => "bloom_stmt_handle".to_string(),
         Type::Struct(name, args) => {
             format!("bloom_struct_{}", named_mangle(name, args))
         }
@@ -265,7 +267,9 @@ impl<'a> CEmitter<'a> {
             | Type::Form
             | Type::Cookies
             | Type::SessionStore
-            | Type::Session => true,
+            | Type::Session
+            | Type::Db
+            | Type::Stmt => true,
             Type::Struct(name, args) => {
                 if let Some(info) = self.checked.structs.get(name) {
                     let bindings: HashMap<String, Type> = info
@@ -313,6 +317,8 @@ impl<'a> CEmitter<'a> {
             Type::Cookies => Some("bloom_web_cookies_retain".to_string()),
             Type::SessionStore => Some("bloom_web_session_store_retain".to_string()),
             Type::Session => Some("bloom_web_session_retain".to_string()),
+            Type::Db => Some("bloom_db_retain".to_string()),
+            Type::Stmt => Some("bloom_db_stmt_retain".to_string()),
             Type::Array(elem) => Some(format!("bloom_arr_{}_clone", arr_suffix(elem))),
             Type::Slice(elem) => Some(format!("bloom_slice_{}_clone", arr_suffix(elem))),
             Type::Struct(name, args) | Type::Enum(name, args) => {
@@ -337,6 +343,8 @@ impl<'a> CEmitter<'a> {
             Type::Cookies => Some("bloom_web_cookies_release".to_string()),
             Type::SessionStore => Some("bloom_web_session_store_release".to_string()),
             Type::Session => Some("bloom_web_session_release".to_string()),
+            Type::Db => Some("bloom_db_release".to_string()),
+            Type::Stmt => Some("bloom_db_stmt_release".to_string()),
             Type::Array(elem) => Some(format!("bloom_arr_{}_drop", arr_suffix(elem))),
             Type::Slice(elem) => Some(format!("bloom_slice_{}_drop", arr_suffix(elem))),
             Type::Struct(name, args) | Type::Enum(name, args) => {
@@ -583,6 +591,10 @@ impl<'a> CEmitter<'a> {
             self.out.push_str(include_str!("../runtime/bloom_fs.c"));
             self.out.push('\n');
         }
+        if loaded.contains("std::db") {
+            self.out.push_str(include_str!("../runtime/bloom_db.c"));
+            self.out.push('\n');
+        }
         if loaded.contains("std::process") {
             self.out
                 .push_str(include_str!("../runtime/bloom_process.c"));
@@ -696,6 +708,19 @@ impl<'a> CEmitter<'a> {
             self.out.push_str(
                 "bloom_fs_handle bloom_fs_bytes_retain(bloom_fs_handle h);\n\
                  void bloom_fs_bytes_release(bloom_fs_handle *h);\n\n",
+            );
+        }
+        if self
+            .checked
+            .functions
+            .iter()
+            .any(|sig| sig.module == "std::db")
+        {
+            self.out.push_str(
+                "static bloom_db_handle bloom_db_retain(bloom_db_handle h);\n\
+                 static void bloom_db_release(bloom_db_handle *h);\n\
+                 static bloom_stmt_handle bloom_db_stmt_retain(bloom_stmt_handle h);\n\
+                 static void bloom_db_stmt_release(bloom_stmt_handle *h);\n\n",
             );
         }
         let instantiations = self.checked.instantiations.clone();
@@ -1939,7 +1964,9 @@ impl<'a> CEmitter<'a> {
                     || info.base_c_name.starts_with("bloom_json_")
                     || info.base_c_name.starts_with("bloom_web_")
                     || info.base_c_name.starts_with("bloom_html_")
-                    || info.base_c_name.starts_with("bloom_http_") =>
+                    || info.base_c_name.starts_with("bloom_http_")
+                    || info.base_c_name.starts_with("bloom_db_")
+                    || info.base_c_name.starts_with("bloom_stmt_") =>
             {
                 self.emit_stdlib_call(&info.base_c_name, &info.params, args, id)
             }

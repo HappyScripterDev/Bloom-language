@@ -1,0 +1,105 @@
+// Fehlerfälle: kaputtes SQL, mehrere Anweisungen, falsche Indizes,
+// Constraint-Verletzung und Spaltenzugriff im falschen Zustand.
+use std::db;
+
+fn ok_int(r: Result<int, string>, label: string) -> void {
+    match r {
+        Result::Ok(v) => println(label + "=ok:" + str(v)),
+        Result::Err(e) => println(label + "=err:" + e)
+    };
+}
+
+fn ok_bool(r: Result<bool, string>, label: string) -> void {
+    match r {
+        Result::Ok(v) => println(label + "=ok:" + str(v)),
+        Result::Err(e) => println(label + "=err:" + e)
+    };
+}
+
+fn ok_text(r: Result<string, string>, label: string) -> void {
+    match r {
+        Result::Ok(v) => println(label + "=ok:" + v),
+        Result::Err(e) => println(label + "=err:" + e)
+    };
+}
+
+fn main() -> int {
+    match db::open_memory() {
+        Result::Ok(database) => run(database),
+        Result::Err(e) => println("open=err:" + e)
+    };
+    match db::open("gibt_es_nicht/db.sqlite") {
+        Result::Ok(_) => println("missing-dir=UNERWARTET-OK"),
+        Result::Err(e) => println("missing-dir=err:" + e)
+    };
+    match db::open(".") {
+        Result::Ok(_) => println("directory=UNERWARTET-OK"),
+        Result::Err(e) => println("directory=err:" + e)
+    };
+    return 0;
+}
+
+fn run(database: db::Database) -> void {
+    match db::prepare(database, "CREATE TABLE t (id INTEGER PRIMARY KEY, s TEXT UNIQUE)") {
+        Result::Ok(stmt) => ok_int(db::execute(stmt), "create"),
+        Result::Err(e) => println("create=err:" + e)
+    };
+    match db::prepare(database, "SELEKT falsch") {
+        Result::Ok(_) => println("syntax=UNERWARTET-OK"),
+        Result::Err(e) => println("syntax=err:" + e)
+    };
+    match db::prepare(database, "SELECT 1; SELECT 2") {
+        Result::Ok(_) => println("multi=UNERWARTET-OK"),
+        Result::Err(e) => println("multi=err:" + e)
+    };
+    match db::prepare(database, "") {
+        Result::Ok(_) => println("empty=UNERWARTET-OK"),
+        Result::Err(e) => println("empty=err:" + e)
+    };
+    match db::prepare(database, "INSERT INTO t (s) VALUES (?1)") {
+        Result::Ok(stmt) => bind_cases(stmt),
+        Result::Err(e) => println("prepare=err:" + e)
+    };
+    match db::prepare(database, "SELECT id, s FROM t") {
+        Result::Ok(stmt) => state_cases(stmt),
+        Result::Err(e) => println("prepare=err:" + e)
+    };
+    match db::prepare(database, "SELECT COUNT(*) FROM t") {
+        Result::Ok(stmt) => ok_int(db::execute(stmt), "select-execute"),
+        Result::Err(e) => println("select-prepare=err:" + e)
+    };
+}
+
+fn bind_cases(stmt: db::Statement) -> void {
+    ok_bool(db::bind_int(stmt, 0, 1), "bind-zero");
+    ok_bool(db::bind_int(stmt, 2, 1), "bind-too-big");
+    ok_bool(db::bind_text(stmt, 1, "eins"), "bind-ok");
+    ok_int(db::execute(stmt), "insert");
+    ok_int(db::execute(stmt), "execute-twice");
+    ok_bool(db::bind_int(stmt, 1, 2), "bind-after-execute");
+    ok_bool(db::reset(stmt), "reset");
+    ok_bool(db::bind_text(stmt, 1, "eins"), "duplicate-bind");
+    ok_int(db::execute(stmt), "duplicate-exec");
+    ok_bool(db::reset(stmt), "reset2");
+    ok_bool(db::bind_text(stmt, 1, "zwei"), "bind-zwei");
+    ok_int(db::execute(stmt), "insert-zwei");
+}
+
+fn state_cases(stmt: db::Statement) -> void {
+    match db::column_int(stmt, 0) {
+        Result::Ok(_) => println("column-before-step=UNERWARTET-OK"),
+        Result::Err(e) => println("column-before-step=err:" + e)
+    };
+    ok_bool(db::step(stmt), "step");
+    ok_int(db::column_int(stmt, 9), "column-index");
+    ok_text(db::column_text(stmt, 0), "wrong-type");
+    while step_true(stmt) {}
+    ok_bool(db::step(stmt), "step-after-done");
+}
+
+fn step_true(stmt: db::Statement) -> bool {
+    return match db::step(stmt) {
+        Result::Ok(v) => v,
+        Result::Err(e) => false
+    };
+}

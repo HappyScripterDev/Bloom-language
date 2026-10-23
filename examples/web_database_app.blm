@@ -1,0 +1,162 @@
+// Kleine Webanwendung: HTML-Formular, SQLite, gerenderte Liste.
+// Eingaben werden ausschließlich über gebundene Parameter gespeichert.
+// Die Demo-Datenbank wird beim Beenden wieder entfernt.
+use std::db;
+use std::web;
+use std::http;
+use std::json;
+use std::html;
+use std::net;
+use std::fs;
+
+fn count_notes(database: db::Database) -> Result<int, string> {
+    let stmt = db::prepare(database, "SELECT count(*) FROM notes")?;
+    let has_row = db::step(stmt)?;
+    if !has_row {
+        return Result::Err("keine Zeile");
+    }
+    return db::column_int(stmt, 0);
+}
+
+fn notes_json(database: db::Database) -> Result<json::JsonValue, string> {
+    let list = json::make_array();
+    let stmt = db::prepare(database, "SELECT text FROM notes ORDER BY id")?;
+    while step_row(stmt) {
+        json::push(list, json::make_string(db::column_text(stmt, 0)?));
+    }
+    return Result::Ok(list);
+}
+
+fn step_row(stmt: db::Statement) -> bool {
+    return match db::step(stmt) {
+        Result::Ok(v) => v,
+        Result::Err(e) => false
+    };
+}
+
+fn render_page(conn: int, tmpl: html::Template, database: db::Database, message: string) -> void {
+    let data = json::make_object();
+    json::set(data, "message", json::make_string(message));
+    match count_notes(database) {
+        Result::Ok(n) => json::set(data, "count", json::make_int(n)),
+        Result::Err(e) => json::set(data, "count", json::make_int(-1))
+    };
+    match notes_json(database) {
+        Result::Ok(list) => json::set(data, "notes", list),
+        Result::Err(e) => json::set(data, "notes", json::make_array())
+    };
+    match html::render_page(conn, 200, tmpl, data) {
+        Result::Ok(_) => println("Seite gesendet"),
+        Result::Err(e) => println("Renderfehler: " + e)
+    };
+}
+
+fn add_note(database: db::Database, text: string) -> Result<bool, string> {
+    let stmt = db::prepare(database, "INSERT INTO notes (text) VALUES (?1)")?;
+    db::bind_text(stmt, 1, text)?;
+    let changes = db::execute(stmt)?;
+    return Result::Ok(changes == 1);
+}
+
+fn handle_add(conn: int, tmpl: html::Template, database: db::Database, request: http::HttpRequest) -> void {
+    match web::form_body_request(request) {
+        Result::Ok(form) => save_note(conn, tmpl, database, form),
+        Result::Err(e) => send_error(conn, 400, "Formularfehler")
+    };
+}
+
+fn save_note(conn: int, tmpl: html::Template, database: db::Database, form: web::FormData) -> void {
+    let text = match web::form_first(form, "text") {
+        Option::Some(v) => trim(v),
+        Option::None => ""
+    };
+    if len(text) == 0 {
+        send_error(conn, 400, "Text fehlt");
+        return;
+    }
+    if len(text) > 2000 {
+        send_error(conn, 413, "Text zu lang");
+        return;
+    }
+    match add_note(database, text) {
+        Result::Ok(_) => render_page(conn, tmpl, database, "Gespeichert"),
+        Result::Err(e) => db_failed(conn, e)
+    };
+}
+
+fn db_failed(conn: int, e: string) -> void {
+    println("DB-Fehler: " + e);
+    send_error(conn, 500, "Speichern fehlgeschlagen");
+}
+
+fn send_error(conn: int, status: int, text: string) -> void {
+    match http::write_response(conn, status, "text/plain; charset=utf-8", text) {
+        Result::Ok(_) => println("Fehler gesendet: " + str(status)),
+        Result::Err(e) => println("Schreibfehler: " + e)
+    };
+}
+
+fn handle(conn: int, tmpl: html::Template, database: db::Database, request: http::HttpRequest) -> void {
+    if request.method == "GET" && request.target == "/" {
+        render_page(conn, tmpl, database, "");
+    } else if request.method == "POST" && request.target == "/add" {
+        handle_add(conn, tmpl, database, request);
+    } else {
+        send_error(conn, 404, "not found");
+    }
+}
+
+fn serve(database: db::Database) -> Result<int, string> {
+    let src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Notizen</title></head>" +
+        "<body><h1>Notizen ({{count}})</h1>" +
+        "<form method=\"post\" action=\"/add\">" +
+        "<p><input name=\"text\" placeholder=\"Neue Notiz\"> " +
+        "<button type=\"submit\">Speichern</button></p></form>" +
+        "<p>{{message}}</p><ul>{{#each notes}}<li>{{this}}</li>{{/each}}</ul>" +
+        "</body></html>";
+    let tmpl = html::template(src)?;
+    let create = db::prepare(database, "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text TEXT)")?;
+    db::execute(create)?;
+    let listener = net::tcp_listen("127.0.0.1", 0, 8)?;
+    println(net::local_port(listener)?);
+    println("Notiz-Server bereit");
+    var i = 0;
+    while i < 5 {
+        let conn = net::tcp_accept(listener)?;
+        match http::read_request(conn) {
+            Result::Ok(request) => handle(conn, tmpl, database, request),
+            Result::Err(e) => println("Lesefehler: " + e)
+        };
+        net::tcp_close(conn);
+        i = i + 1;
+    }
+    net::tcp_close(listener);
+    return Result::Ok(0);
+}
+
+fn run() -> Result<int, string> {
+    let dir = "bloom_webapp_demo";
+    let path = fs::join_path(dir, "app.db");
+    fs::create_dir_all(dir)?;
+    let code = serve_with_db(path)?;
+    fs::remove_file(path)?;
+    fs::remove_dir(dir)?;
+    return Result::Ok(code);
+}
+
+fn serve_with_db(path: string) -> Result<int, string> {
+    let database = db::open(path)?;
+    return serve(database);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}

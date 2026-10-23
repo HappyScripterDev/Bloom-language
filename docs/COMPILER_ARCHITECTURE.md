@@ -301,6 +301,44 @@ Header. Tests: `web_cookie_api_natively`, `web_session_api_natively`,
 `web_session_basic_e2e`, `web_session_expiry_e2e`,
 `web_session_errors_e2e`, `web_csrf_form_e2e`.
 
+## Datenbank (`std::db`, SQLite)
+
+SQLite wird als **Amalgamation** mitgeliefert
+(`runtime/sqlite3.c`/`.h`, Version 3.54.1, Public Domain,
+`runtime/sqlite3_NOTICE.md`). Der Compiler bettet beide Dateien per
+`include_str!` ein; bei einem Programm mit `std::db` schreibt er sie in
+das temporäre Build-Verzeichnis neben `program.c` und übergibt
+`sqlite3.c` als **zweite Übersetzungseinheit** an den C-Compiler
+(`Toolchain::compile(..., extra_sources)`). Nur dann werden
+`SQLITE_THREADSAFE=0`, `SQLITE_OMIT_LOAD_EXTENSION` und `SQLITE_DQS=0`
+definiert. Es gibt keine zusätzliche Link-Bibliothek: die Amalgamation
+bringt ihre Windows-Abhängigkeiten selbst mit, Bloom linkt weiterhin
+nur die bisherigen Bibliotheken. `--emit-c` kopiert `sqlite3.c`/`.h`
+ebenfalls neben die ausgegebene C-Datei, damit sie sich manuell
+übersetzen lässt.
+
+`bloom_db.c` (emittiert direkt nach `bloom_fs.c`, weil BLOBs die
+`std::fs::Bytes`-Helfer nutzen) hält zwei verwaltete Handles:
+`bloom_db` (Referenz auf `sqlite3*`) und `bloom_db_stmt` (Statement,
+Zustand, Besitzreferenz auf `bloom_db`). Ein Statement erhöht den
+Zähler der Datenbank beim Präparieren und gibt ihn beim Finalisieren
+frei; dadurch lebt die Verbindung, solange irgendein Bloom-Handle sie
+braucht. Die Datenbank schließt erst bei Zähler 0
+(`sqlite3_close_v2`, rollt eine offene Transaktion zurück).
+
+Der Binder akzeptiert nur den Zustand `fresh` und Indizes
+1..`bind_parameter_count`; Spaltenzugriffe nur im Zustand `row` und
+0-basiert. `prepare` verlangt genau eine Anweisung (Rest auf reine
+Leerzeichen/Kommentare geprüft) und lehnt eingebettete NUL-Bytes ab.
+Fehler werden als `<op>: <sqlite3_errmsg> (SQLite code N)` formatiert;
+der SQL-Text wird nicht wiederholt. Emission der Runtime nur bei
+geladenem `std::db`; die Proto-typdeklarationen für Retain/Release
+stehen im Composite-Helper-Block. `bloom_db_`/`bloom_stmt_` sind in
+der Borrowed-Args-Liste von `emit_stdlib_call` eingetragen (sonst
+würde der Codegen Argumente klonen, die die Runtime nur leiht).
+Getestet durch `db_api_natively`, `db_file_natively`,
+`db_web_app_e2e` und `db_examples_natively`.
+
 ## Formatter (`src/fmt.rs`)
 
 `bloom fmt` nutzt `lex_with_comments` (der Compiler-Pfad `lex` verwirft
