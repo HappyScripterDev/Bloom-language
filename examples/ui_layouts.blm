@@ -1,0 +1,50 @@
+// Layout-Bausteine: Container, Stack, Row (mit Umbruch) und Grid.
+// Alle Abstaende sind Design-Tokens (xs, sm, md, lg, xl).
+use std::ui;
+
+fn seite() -> Result<ui::UiNode, string> {
+    let doc = ui::document(ui::PageOptions {
+        title: "Bloom UI: Layouts",
+        description: "Container, Stack, Row und Grid",
+        lang: "de",
+        theme: "light",
+        stylesheet_href: "/ui.css"
+    })?;
+    let body = ui::body(doc);
+    let wrap = ui::container("lg")?;
+    ui::append(body, wrap);
+    let section = ui::section("Streifen und Raster");
+    let stack = ui::stack("md")?;
+    let row = ui::row("sm", true)?;
+    ui::append(row, ui::badge("Flexibel", "info")?);
+    ui::append(row, ui::badge("Umbruch", "success")?);
+    ui::append(row, ui::badge("Responsiv", "warning")?);
+    ui::append(stack, row);
+    ui::append(stack, ui::divider());
+    let grid = ui::grid(3, "md")?;
+    ui::append(grid, ui::text("Feld 1"));
+    ui::append(grid, ui::text("Feld 2"));
+    ui::append(grid, ui::text("Feld 3"));
+    ui::append(grid, ui::text("Feld 4"));
+    ui::append(grid, ui::text("Feld 5"));
+    ui::append(grid, ui::text("Feld 6"));
+    ui::append(stack, grid);
+    ui::append(section, stack);
+    ui::append(wrap, section);
+    return Result::Ok(doc);
+}
+
+fn ausgeben(doc: ui::UiNode) -> void {
+    match ui::render(doc) {
+        Result::Ok(html) => println(html),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+}
+
+fn main() -> int {
+    match seite() {
+        Result::Ok(doc) => ausgeben(doc),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}

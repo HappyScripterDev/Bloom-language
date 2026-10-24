@@ -571,6 +571,47 @@ Vertagt (weiterhin geplant):
 - GUI-Anbindung (aufbauend auf `std::win32`)
 - WebSocket, JSON-Streaming
 
+## Version 0.20.0 – UI-Komponenten und Themes (implementiert)
+
+- **`std.ui`** baut HTML aus festen Bausteinen: Dokument, Container,
+  Stack, Row, Grid, Section, Divider, Überschriften, Text, Karten,
+  Alerts, Badges, Buttons, Links, Navigation, Breadcrumbs, Formulare
+  (Label, Input, Textarea, Select, Checkbox, Radio, Field mit Hilfe/
+  Fehler, Submit), Tabellen, Avatar, Progress, Skeleton, Pagination und
+  Empty State.
+- **Sicherheit:** kein Roh-HTML; Text und Attributwerte über den
+  bestehenden Escaper; URL-Allowlist (`http(s)`, ein führender `/`,
+  relativ, Fragment); validierte IDs, Feldnamen, Klassen, Tokens und
+  Größen; Limits (8 MiB Ausgabe, 20000 Knoten, Tiefe 64, 1 MiB Text,
+  4096 Bytes Attributwert).
+- **Themes:** `light`, `dark`, `system` über `data-theme` und
+  `prefers-color-scheme`; Stylesheet (rund 14 KB) beim Bauen
+  eingebettet, als String oder mit Cache-Header auslieferbar;
+  `prefers-reduced-motion` und ein 720-px-Breakpoint sind enthalten.
+- **Integration:** `send_page`/`send_stylesheet` für `std::http`;
+  Formulare bleiben mit `std::web`/`std::auth` kombinierbar; CSRF bleibt
+  Aufgabe der Anwendung.
+- **Behoben:** doppelte Tabellenzellen, geleakte Description-Meta,
+  hängende Stack-Tags, geleakte Varianten-/Pagination-Strings,
+  Checkbox-/Radio-Mutatoren trafen den Wrapper statt das Eingabefeld.
+- **Beispiele:** `ui_hello`, `ui_layouts`, `ui_components`, `ui_forms`,
+  `ui_themes`, `ui_table`, `ui_dashboard`, `ui_login_page`,
+  `ui_gallery`
+- 523 Tests (323 Unit + 200 E2E), darunter Escaping, URL-/Token-
+  Ablehnung, Komponenten-/ARIA-Prüfungen, Theme-/Stylesheet-Tests,
+  HTTP-Auslieferung mit Headern und alle neun Beispiele unter
+  `BLOOM_MEM_REPORT=1`
+
+Vertagt (weiterhin geplant):
+
+- Native Windows-Desktopfenster und -Controls (eigenes Modul)
+- Clientseitige Interaktivität (JavaScript), freies CSS/HTML,
+  Formularvalidierung im Browser
+- Weitere Komponenten: Menüs, Tabs, Modals, Charts, Tooltips
+- Streaming/Range-Requests, ETag/Last-Modified, automatisches Neuladen
+- Template-Includes, Makros, ausführbare Ausdrücke, Raw-HTML
+- WebSocket, JSON-Streaming
+
 ## Version 1.0.0+ – Ökosystem (geplant)
 
 - Paketmanager, Language Server (LSP), Debug-Informationen

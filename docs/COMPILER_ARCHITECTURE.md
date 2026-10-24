@@ -49,13 +49,16 @@ manchmal durchscheinen, aber damit kann ich leben.
 | `runtime/bloom_path.c` | `std::path`-Implementierung (lexikalische Pfadoperationen, Host-Semantik) |
 | `runtime/bloom_web.c` | `std::web`-Implementierung (Router, Matching, Prozentdekodierung, JSON-Hilfen) |
 | `runtime/bloom_html.c` | `std::html`-Implementierung (HTML-Escaping, iterativer Template-Parser und -Renderer) |
+| `runtime/bloom_ui.c` | `std::ui`-Implementierung (Komponentenbaum, Validierung, Renderer); CSS als eingebetteter C-String |
+| `runtime/bloom_ui.css` | Stylesheet-Quelle für `std::ui` (Design-Tokens, Light/Dark/System, Komponenten) |
 | `runtime/bloom_json.c` | `std::json`-Implementierung (RFC-8259-Parser, refcountetes Wertmodell, Serializer) |
 | `tests/e2e.rs` | Integrationstests über die echte CLI |
 
 ## Virtuelle Standardmodule
 
 `std::math`, `std::fs`, `std::process`, `std::time`, `std::win32`,
-`std::net`, `std::tls`, `std::http`, `std::path` und `std::json` haben **keine
+`std::net`, `std::tls`, `std::http`, `std::path`, `std::json`,
+`std::web`, `std::html`, `std::db`, `std::auth` und `std::ui` haben **keine
 Quelldatei**. Der Modul-Loader erkennt die Pfade (`builtin_module`) und legt
 ein leeres Modul mit `BuiltinModule`-Marker an. Der Checker registriert
 dafür:
@@ -69,8 +72,12 @@ dafür:
 vom internen Typ `Type::Web`) sowie `std::web::Match` (Felder `status`,
 `name`, `allow` und `params: std::json::JsonValue`), `std::fs::Bytes`
 (Feld `id` vom internen Typ `Type::Bytes`), `std::html::Template`
-(Feld `id` vom internen Typ `Type::Html`) und `std::web::FormData`
-(Feld `id` vom internen Typ `Type::Form`).
+(Feld `id` vom internen Typ `Type::Html`), `std::web::FormData`
+(Feld `id` vom internen Typ `Type::Form`), `std::db::Database` und
+`std::db::Statement` (`Type::Db`/`Type::Stmt`), `std::auth::Limiter`
+(`Type::Limiter`) sowie `std::ui::UiNode` (`Type::Ui`, Feld `id`) und die
+Options-Structs `std::ui::ButtonOptions`, `InputOptions`, `FormOptions`,
+`PageOptions` und `TableOptions`.
 
 Codegen überspringt Prototypen für `std::*`-Funktionen, emittiert die
 C-Implementierung nur für tatsächlich geladene Module (nach den
@@ -222,6 +229,35 @@ und nutzt `bloom_http_write_response_full` mit
 `std::fs`-Helfer (Größenlimit vor dem Lesen, UTF-8-Prüfung) und nutzen
 denselben Parser; `template_file_from` öffnet mit Wurzelordner-Schutz
 (kanonischer Pfadvergleich nach dem Öffnen).
+
+## Komponenten (`std::ui`)
+
+`bloom_ui.c` verwaltet einen Baum aus Element- und Textknoten
+(`Type::Ui`, refcounteter Handle). Tag- und Attributnamen stammen
+ausschließlich aus dem Laufzeitcode; die öffentlichen Funktionen nehmen
+nur Inhalte und Tokens aus festen Listen. `ui::render` schreibt iterativ
+mit expliziten Grenzen (Ausgabe 8 MiB, 20000 Knoten, Tiefe 64,
+4096 Kinder pro Knoten) und maskiert Text und Attributwerte über
+`bloom_html_escape`. IDs, Feldnamen und Klassen werden zeichenweise
+validiert; URLs laufen durch eine Allowlist
+(`http(s)://…`, `/pfad`, relativ, `#fragment`); Attributwerte dürfen
+4096 Bytes nicht überschreiten und keine Steuerzeichen enthalten.
+`std::ui` liefert bewusst keinen Roh-HTML-Knoten.
+
+Das Stylesheet ist die Datei `runtime/bloom_ui.css` und wird beim
+Bauen als C-String (`BLOOM_UI_CSS`) in `bloom_ui.c` eingebettet;
+`ui::stylesheet` kopiert daraus, `ui::send_stylesheet` antwortet mit
+`text/css; charset=utf-8` und einem Cache-Header. Themes sind reines
+CSS (`data-theme="light|dark|system"`, `prefers-color-scheme`).
+
+Die Signaturregistrierung lädt `std::html` (und darüber `http`, `net`,
+`tls`, `fs`) und emittiert die UI-Runtime **nach** `std::html`;
+`send_page` nutzt `bloom_http_write_response_full`. Checkbox und Radio
+liefern einen Layout-Wrapper mit einem geliehenen Zeiger auf das innere
+`<input>`; ID-/ARIA-/Zustandsfunktionen adressieren dieses Feld,
+`field` setzt `for`, `aria-describedby` und `aria-invalid` dort.
+Tabellenzeilen und -zellen hängen sich beim Erzeugen selbst an
+(`table_row` an `thead`/`tbody`, Zellen an `tr`).
 
 ## Dateien (`std::fs::Bytes`, statische Inhalte)
 
@@ -706,7 +742,10 @@ nativer Kopfsemantik dargestellt.
   einen Shared-Subtree-Regressionstest für die JSON-Referenzzählung
   abgedeckt; `std::html` über Escaping-/Parser-/Render-/Limit-/
   Server-Tests (Content-Type, Zusatz-Header, Escaping gefährlicher
-  Eingaben, 405/404) und die Beispiele. Fehlt
+  Eingaben, 405/404) und die Beispiele; `std::ui` über Escaping-,
+  URL-/ID-/Token-, Komponenten-, Theme-/Stylesheet-, Limit- und
+  HTTP-Auslieferungstests (eigene Seite und CSS mit Cache-Header) sowie
+  die neun Beispiele. Fehlt
   ein C-Compiler, überspringen sich die betroffenen Tests mit Hinweis.
 
 ## Bewusste Entwurfsentscheidungen

@@ -1185,6 +1185,9 @@ impl Checker {
                 Some(crate::modules::BuiltinModule::Auth) => {
                     self.register_auth_functions(&m.name);
                 }
+                Some(crate::modules::BuiltinModule::Ui) => {
+                    self.register_ui_functions(&m.name);
+                }
                 Some(crate::modules::BuiltinModule::Win32) => {
                     if cfg!(windows) {
                         self.register_win32_functions(&m.name);
@@ -2468,6 +2471,407 @@ impl Checker {
                 "bloom_auth_limiter_expire",
                 vec![limiter_ty],
                 Type::Int,
+            ),
+        ];
+        for (name, c_name, params, ret) in defs {
+            self.register_builtin_fn(module, name, c_name, params, ret);
+        }
+    }
+    fn register_ui_functions(&mut self, module: &str) {
+        // The UI layer renders through the existing HTML escaper and the
+        // HTTP response helpers; register those runtimes first.
+        self.register_html_functions("std::html");
+        let span = Span::point(1, 1);
+        let node_canonical = format!("{}::UiNode", module);
+        self.structs
+            .entry(node_canonical)
+            .or_insert_with(|| StructInfo {
+                params: Vec::new(),
+                fields: vec![StructField {
+                    name: "id".to_string(),
+                    ty: Type::Ui,
+                }],
+                span,
+                module: module.to_string(),
+                is_pub: true,
+            });
+        let option_structs: Vec<(&str, Vec<(&str, Type)>)> = vec![
+            (
+                "ButtonOptions",
+                vec![
+                    ("variant", Type::String),
+                    ("size", Type::String),
+                    ("type_name", Type::String),
+                    ("name", Type::String),
+                    ("value", Type::String),
+                    ("disabled", Type::Bool),
+                ],
+            ),
+            (
+                "InputOptions",
+                vec![
+                    ("type_name", Type::String),
+                    ("name", Type::String),
+                    ("value", Type::String),
+                    ("id", Type::String),
+                    ("placeholder", Type::String),
+                    ("required", Type::Bool),
+                    ("disabled", Type::Bool),
+                ],
+            ),
+            (
+                "FormOptions",
+                vec![("action", Type::String), ("method", Type::String)],
+            ),
+            (
+                "PageOptions",
+                vec![
+                    ("title", Type::String),
+                    ("description", Type::String),
+                    ("lang", Type::String),
+                    ("theme", Type::String),
+                    ("stylesheet_href", Type::String),
+                ],
+            ),
+            ("TableOptions", vec![("caption", Type::String)]),
+        ];
+        for (name, fields) in option_structs {
+            let canonical = format!("{}::{}", module, name);
+            let fields = fields
+                .into_iter()
+                .map(|(n, ty)| StructField {
+                    name: n.to_string(),
+                    ty,
+                })
+                .collect();
+            self.structs.entry(canonical).or_insert_with(|| StructInfo {
+                params: Vec::new(),
+                fields,
+                span,
+                module: module.to_string(),
+                is_pub: true,
+            });
+        }
+        let node_ty = Type::Struct(format!("{}::UiNode", module), Vec::new());
+        let button_options = Type::Struct(format!("{}::ButtonOptions", module), Vec::new());
+        let input_options = Type::Struct(format!("{}::InputOptions", module), Vec::new());
+        let form_options = Type::Struct(format!("{}::FormOptions", module), Vec::new());
+        let page_options = Type::Struct(format!("{}::PageOptions", module), Vec::new());
+        let table_options = Type::Struct(format!("{}::TableOptions", module), Vec::new());
+        let str_err = |ok: Type| Type::Enum("Result".to_string(), vec![ok, Type::String]);
+        let node_err = str_err(node_ty.clone());
+        let defs: Vec<(&str, &str, Vec<Type>, Type)> = vec![
+            (
+                "append",
+                "bloom_ui_append",
+                vec![node_ty.clone(), node_ty.clone()],
+                Type::Bool,
+            ),
+            (
+                "set_id",
+                "bloom_ui_set_id",
+                vec![node_ty.clone(), Type::String],
+                Type::Bool,
+            ),
+            (
+                "placeholder",
+                "bloom_ui_placeholder",
+                vec![node_ty.clone(), Type::String],
+                Type::Bool,
+            ),
+            (
+                "require",
+                "bloom_ui_require",
+                vec![node_ty.clone()],
+                Type::Bool,
+            ),
+            (
+                "disable",
+                "bloom_ui_disable",
+                vec![node_ty.clone()],
+                Type::Bool,
+            ),
+            (
+                "readonly",
+                "bloom_ui_readonly",
+                vec![node_ty.clone()],
+                Type::Bool,
+            ),
+            (
+                "set_value",
+                "bloom_ui_set_value",
+                vec![node_ty.clone(), Type::String],
+                Type::Bool,
+            ),
+            ("check", "bloom_ui_check", vec![node_ty.clone()], Type::Bool),
+            (
+                "select_option",
+                "bloom_ui_select_option",
+                vec![node_ty.clone()],
+                Type::Bool,
+            ),
+            (
+                "set_aria_label",
+                "bloom_ui_set_aria_label",
+                vec![node_ty.clone(), Type::String],
+                Type::Bool,
+            ),
+            (
+                "set_class",
+                "bloom_ui_set_class",
+                vec![node_ty.clone(), Type::String],
+                str_err(Type::Bool),
+            ),
+            (
+                "container",
+                "bloom_ui_container",
+                vec![Type::String],
+                node_err.clone(),
+            ),
+            (
+                "stack",
+                "bloom_ui_stack",
+                vec![Type::String],
+                node_err.clone(),
+            ),
+            (
+                "row",
+                "bloom_ui_row",
+                vec![Type::String, Type::Bool],
+                node_err.clone(),
+            ),
+            (
+                "grid",
+                "bloom_ui_grid",
+                vec![Type::Int, Type::String],
+                node_err.clone(),
+            ),
+            (
+                "section",
+                "bloom_ui_section",
+                vec![Type::String],
+                node_ty.clone(),
+            ),
+            ("divider", "bloom_ui_divider", vec![], node_ty.clone()),
+            (
+                "heading",
+                "bloom_ui_heading",
+                vec![Type::Int, Type::String],
+                node_err.clone(),
+            ),
+            ("text", "bloom_ui_text", vec![Type::String], node_ty.clone()),
+            (
+                "muted_text",
+                "bloom_ui_muted_text",
+                vec![Type::String],
+                node_ty.clone(),
+            ),
+            (
+                "link",
+                "bloom_ui_link",
+                vec![Type::String, Type::String],
+                node_err.clone(),
+            ),
+            (
+                "badge",
+                "bloom_ui_badge",
+                vec![Type::String, Type::String],
+                node_err.clone(),
+            ),
+            ("card", "bloom_ui_card", vec![Type::String], node_ty.clone()),
+            (
+                "alert",
+                "bloom_ui_alert",
+                vec![Type::String, Type::String],
+                node_err.clone(),
+            ),
+            (
+                "button",
+                "bloom_ui_button",
+                vec![Type::String, button_options],
+                node_err.clone(),
+            ),
+            (
+                "form",
+                "bloom_ui_form",
+                vec![form_options],
+                node_err.clone(),
+            ),
+            (
+                "label",
+                "bloom_ui_label",
+                vec![Type::String, Type::String],
+                node_err.clone(),
+            ),
+            (
+                "input",
+                "bloom_ui_input",
+                vec![input_options],
+                node_err.clone(),
+            ),
+            (
+                "textarea",
+                "bloom_ui_textarea",
+                vec![Type::String, Type::String, Type::Int, Type::String],
+                node_err.clone(),
+            ),
+            (
+                "select",
+                "bloom_ui_select",
+                vec![Type::String, Type::String, Type::Bool],
+                node_err.clone(),
+            ),
+            (
+                "option",
+                "bloom_ui_option",
+                vec![Type::String, Type::String],
+                node_ty.clone(),
+            ),
+            (
+                "checkbox",
+                "bloom_ui_checkbox",
+                vec![Type::String, Type::String, Type::String],
+                node_err.clone(),
+            ),
+            (
+                "radio",
+                "bloom_ui_radio",
+                vec![Type::String, Type::String, Type::String],
+                node_err.clone(),
+            ),
+            (
+                "field",
+                "bloom_ui_field",
+                vec![
+                    node_ty.clone(),
+                    Type::String,
+                    Type::String,
+                    Type::String,
+                    Type::String,
+                ],
+                node_err.clone(),
+            ),
+            (
+                "help_text",
+                "bloom_ui_help_text",
+                vec![Type::String],
+                node_ty.clone(),
+            ),
+            (
+                "form_error",
+                "bloom_ui_form_error",
+                vec![Type::String],
+                node_ty.clone(),
+            ),
+            (
+                "submit_button",
+                "bloom_ui_submit_button",
+                vec![Type::String],
+                node_ty.clone(),
+            ),
+            ("nav", "bloom_ui_nav", vec![Type::String], node_ty.clone()),
+            (
+                "nav_link",
+                "bloom_ui_nav_link",
+                vec![Type::String, Type::String, Type::Bool],
+                node_err.clone(),
+            ),
+            (
+                "breadcrumbs",
+                "bloom_ui_breadcrumbs",
+                vec![Type::String],
+                node_ty.clone(),
+            ),
+            (
+                "breadcrumb",
+                "bloom_ui_breadcrumb",
+                vec![Type::String, Type::String],
+                node_err.clone(),
+            ),
+            (
+                "table",
+                "bloom_ui_table",
+                vec![table_options],
+                node_err.clone(),
+            ),
+            (
+                "table_row",
+                "bloom_ui_table_row",
+                vec![node_ty.clone(), Type::Bool],
+                node_err.clone(),
+            ),
+            (
+                "table_cell",
+                "bloom_ui_table_cell",
+                vec![node_ty.clone(), Type::String],
+                node_err.clone(),
+            ),
+            (
+                "table_header_cell",
+                "bloom_ui_table_header_cell",
+                vec![node_ty.clone(), Type::String],
+                node_err.clone(),
+            ),
+            (
+                "empty_state",
+                "bloom_ui_empty_state",
+                vec![Type::String, Type::String],
+                node_ty.clone(),
+            ),
+            (
+                "avatar",
+                "bloom_ui_avatar",
+                vec![Type::String, Type::String, Type::String],
+                node_err.clone(),
+            ),
+            (
+                "progress",
+                "bloom_ui_progress",
+                vec![Type::Int, Type::Int, Type::String],
+                node_err.clone(),
+            ),
+            (
+                "skeleton",
+                "bloom_ui_skeleton",
+                vec![Type::Int],
+                node_err.clone(),
+            ),
+            (
+                "pagination",
+                "bloom_ui_pagination",
+                vec![Type::Int, Type::Int, Type::String],
+                node_err.clone(),
+            ),
+            (
+                "document",
+                "bloom_ui_document",
+                vec![page_options],
+                node_err.clone(),
+            ),
+            (
+                "body",
+                "bloom_ui_body",
+                vec![node_ty.clone()],
+                node_ty.clone(),
+            ),
+            (
+                "render",
+                "bloom_ui_render",
+                vec![node_ty.clone()],
+                str_err(Type::String),
+            ),
+            (
+                "send_page",
+                "bloom_ui_send_page",
+                vec![Type::Int, Type::Int, node_ty.clone(), Type::String],
+                str_err(Type::Bool),
+            ),
+            ("stylesheet", "bloom_ui_stylesheet", vec![], Type::String),
+            (
+                "send_stylesheet",
+                "bloom_ui_send_stylesheet",
+                vec![Type::Int],
+                str_err(Type::Bool),
             ),
         ];
         for (name, c_name, params, ret) in defs {

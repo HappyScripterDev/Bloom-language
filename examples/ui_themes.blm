@@ -1,0 +1,69 @@
+// Themes: light, dark und system. Der Umschalter ist reines CSS
+// (data-theme am html-Element); "system" folgt prefers-color-scheme.
+// Die Demo schreibt HTML-Dateien und das Stylesheet in einen Ordner.
+use std::fs;
+use std::ui;
+
+fn seite(theme: string) -> Result<ui::UiNode, string> {
+    let doc = ui::document(ui::PageOptions {
+        title: "Theme: " + theme,
+        description: "Theme-Demo fuer std::ui",
+        lang: "de",
+        theme: theme,
+        stylesheet_href: "bloom-ui.css"
+    })?;
+    let body = ui::body(doc);
+    let wrap = ui::container("sm")?;
+    ui::append(body, wrap);
+    ui::append(wrap, ui::heading(1, "Theme: " + theme)?);
+    ui::append(wrap, ui::text("Farben und Abstaende kommen aus dem Stylesheet."));
+    let card = ui::card("Beispielkarte");
+    ui::append(card, ui::badge("aktiv", "success")?);
+    ui::append(card, ui::text("Karten, Buttons und Tabellen passen sich an."));
+    ui::append(wrap, card);
+    return Result::Ok(doc);
+}
+
+fn schreiben(dir: string, theme: string) -> Result<int, string> {
+    let doc = seite(theme)?;
+    let html = ui::render(doc)?;
+    let datei = fs::join_path(dir, theme + ".html");
+    let bytes = fs::write_text(datei, html)?;
+    println(datei + ": " + str(bytes) + " Bytes");
+    return Result::Ok(bytes);
+}
+
+fn aufraeumen(dir: string, css: string) -> Result<int, string> {
+    fs::remove_file(fs::join_path(dir, "light.html"))?;
+    fs::remove_file(fs::join_path(dir, "dark.html"))?;
+    fs::remove_file(fs::join_path(dir, "system.html"))?;
+    fs::remove_file(css)?;
+    fs::remove_dir(dir)?;
+    return Result::Ok(0);
+}
+
+fn demo() -> Result<int, string> {
+    let dir = "bloom_ui_demo";
+    fs::create_dir_all(dir)?;
+    let css = fs::join_path(dir, "bloom-ui.css");
+    let bytes = fs::write_text(css, ui::stylesheet())?;
+    println(css + ": " + str(bytes) + " Bytes");
+    schreiben(dir, "light")?;
+    schreiben(dir, "dark")?;
+    schreiben(dir, "system")?;
+    aufraeumen(dir, css)?;
+    println("Demo-Dateien wieder entfernt.");
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match demo() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

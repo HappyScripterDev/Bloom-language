@@ -12,7 +12,7 @@ schreiben kann: Dateien lesen, im Netzwerk reden, JSON verarbeiten,
 HTML-Seiten ausliefern. Alles davon ist schon eingebaut und braucht
 keine externen Bibliotheken.
 
-Stand: **0.19.0**. Getestet wird auf Windows (MSVC). Linux und macOS
+Stand: **0.20.0**. Getestet wird auf Windows (MSVC). Linux und macOS
 sind im Code vorgesehen, aber ich entwickle und teste fast nur auf
 Windows.
 
@@ -104,35 +104,35 @@ Wenn Bloom keinen C-Compiler findet, sagt es dir, was fehlt. Welchen
 es nimmt, kann man mit `BLOOM_CC` erzwingen (`set BLOOM_CC=clang`).
 Mehr dazu steht in [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
-## Was in 0.19 dazugekommen ist
+## Was in 0.20 dazugekommen ist
 
-- `std.auth`: Passwörter werden mit **Argon2id** gehasht (m=64 MiB,
-  t=3, p=1, Salt 16 Bytes, PHC-Format). Die Referenzimplementierung
-  liegt eingebettet im Repo (`runtime/argon2/`, CC0/Apache-2.0,
-  Hinweise in `runtime/argon2_NOTICE.md`). Bei unbekannten Benutzern
-  wird derselbe Aufwand mit einem Dummy-Hash gerechnet.
-- Konten in SQLite: `setup`, `register_user`, `authenticate`,
-  `user_find`, `user_get`, `user_disable`/`user_enable`,
-  `password_change`. Benutzernamen werden ASCII-normalisiert;
-  Duplikate verhindert ein UNIQUE-Constraint. Unbekannter Name und
-  falsches Passwort liefern dieselbe Meldung.
-- Anmeldung mit Sessions: `auth::login` rotiert die Session
-  (`web::session_regenerate`: neue ID, neuer CSRF-Token) und speichert
-  nur Benutzer-ID und `auth_version`. `auth::current_user` prüft
-  Registrierung, Aktivstatus und Version; `auth::logout` löscht die
-  serverseitige Session. Passwortwechsel und Deaktivierung machen
-  ältere Sessions sofort ungültig.
-- Rollen: `role_create`, `role_delete`, `role_assign`, `role_remove`,
-  `roles_of`, `has_role`. Kein Standard-Admin, keine automatischen
-  Rechte; eine Session allein ist keine Berechtigung.
-- Login-Limiter: `auth::limiter` mit fester Fenstergröße, begrenzter
-  Eintragszahl und dokumentierter Verdrängung. Pro Prozess, kein
-  verteilter Schutz.
-- Behoben: `web::delete_cookie` sendet jetzt wirklich `Max-Age=0`
-  (vorher wurde das Attribut weggelassen).
-- Beispiele: `auth_password`, `auth_users`, `auth_sessions`,
-  `auth_limiter`, `web_auth_app` (vollständige Anmeldung mit
-  Registrierung, Login, Rollen, Logout und Passwortwechsel).
+- `std.ui`: HTML-Seiten aus geprüften Bausteinen. Dokument, Layout
+  (Container, Stack, Row, Grid, Section), Text, Karten, Alerts, Badges,
+  Buttons, Formulare, Tabellen, Navigation, Breadcrumbs, Avatar,
+  Fortschritt, Skeleton, Pagination und Leerzustände.
+- Kein rohes HTML: Texte und Attributwerte werden mit dem vorhandenen
+  Escaper maskiert. URLs laufen durch eine Allowlist (`http(s)`, ein
+  führender `/`, relative Pfade, Fragmente); IDs, Feldnamen, Klassen,
+  Größen und Varianten werden validiert. Limits: 8 MiB Ausgabe,
+  20000 Knoten, Tiefe 64, 1 MiB Text pro Knoten.
+- Themes ohne JavaScript: `light`, `dark` und `system` über
+  `data-theme` und `prefers-color-scheme`. Das Stylesheet
+  (`runtime/bloom_ui.css`, rund 14 KB) wird beim Bauen eingebettet und
+  ist als `ui::stylesheet()` oder direkt über `ui::send_stylesheet`
+  verfügbar (eigener Cache-Header).
+- Formulare und Barrierefreiheit: Labels mit `for`, `aria-describedby`
+  für Hilfe/Fehler, `aria-invalid`, `aria-current`, `scope="col"`,
+  Fortschritt mit `aria-label`. Checkbox-/Radio-Mutatorfunktionen wirken
+  auf das innere Eingabefeld.
+- Integration: `ui::send_page` liefert direkt an eine HTTP-Verbindung
+  aus; Seiten lassen sich mit `std::auth`, `std::db` und `std::web`
+  kombinieren. `std::ui` ersetzt keinen CSRF-Schutz.
+- Behoben: doppelte Tabellenzellen durch versehentliches zweites
+  Anhängen, ein Leck beim Description-Meta, hängende Stack-Tags bei
+  Überschriften und geleakte Varianten-/Pagination-Strings.
+- Beispiele: `ui_hello`, `ui_layouts`, `ui_components`, `ui_forms`,
+  `ui_themes`, `ui_table`, `ui_dashboard`, `ui_login_page`,
+  `ui_gallery`.
 
 ## Was (noch) nicht geht
 
@@ -164,7 +164,7 @@ Damit hier keine falschen Erwartungen entstehen:
 ## Selbst entwickeln
 
 ```bash
-cargo test                    # 516 Tests: Unit + echte kompilierte Programme
+cargo test                    # 523 Tests: Unit + echte kompilierte Programme
 cargo clippy --all-targets
 cargo fmt
 ```
@@ -185,6 +185,7 @@ bloom run examples/web_cookies.blm
 bloom run examples/db_prepared.blm
 bloom run examples/auth_password.blm
 bloom run examples/web_csrf_form.blm
+bloom run examples/ui_hello.blm
 ```
 
 ## Lizenz

@@ -1,0 +1,83 @@
+// Login-Seite: Formular mit Feld-Fehler, Alert und sicheren Links.
+// Die Fehlervariante zeigt, wie ein Feld als ungueltig markiert wird.
+use std::ui;
+
+fn formular(fehler: string) -> Result<ui::UiNode, string> {
+    let form = ui::form(ui::FormOptions {
+        action: "/anmelden",
+        method: "post"
+    })?;
+    let email = ui::input(ui::InputOptions {
+        type_name: "email",
+        name: "email",
+        value: "",
+        id: "email",
+        placeholder: "du@example.com",
+        required: true,
+        disabled: false
+    })?;
+    ui::append(form, ui::field(email, "email", "E-Mail", "Wir senden keinen Spam.", fehler)?);
+    let passwort = ui::input(ui::InputOptions {
+        type_name: "password",
+        name: "passwort",
+        value: "",
+        id: "passwort",
+        placeholder: "Passwort",
+        required: true,
+        disabled: false
+    })?;
+    ui::append(form, ui::field(passwort, "passwort", "Passwort", "", "")?);
+    ui::append(form, ui::submit_button("Anmelden"));
+    return Result::Ok(form);
+}
+
+fn seite(mit_fehler: bool) -> Result<ui::UiNode, string> {
+    let doc = ui::document(ui::PageOptions {
+        title: "Bloom UI: Anmelden",
+        description: "Login-Beispiel",
+        lang: "de",
+        theme: "system",
+        stylesheet_href: "/ui.css"
+    })?;
+    let body = ui::body(doc);
+    let wrap = ui::container("sm")?;
+    ui::append(body, wrap);
+    ui::append(wrap, ui::heading(1, "Anmelden")?);
+    if mit_fehler {
+        ui::append(wrap, ui::alert("E-Mail oder Passwort ist falsch.", "danger")?);
+        ui::append(wrap, formular("Bitte pruefe die Adresse.")?);
+    } else {
+        ui::append(wrap, ui::muted_text("Bitte melde dich an."));
+        ui::append(wrap, formular("")?);
+    }
+    return Result::Ok(doc);
+}
+
+fn ausgeben(doc: ui::UiNode, label: string) -> void {
+    match ui::render(doc) {
+        Result::Ok(html) => zeigen(html, label),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+}
+
+fn zeigen(html: string, label: string) -> void {
+    println(label + ": " + str(len(html)) + " Zeichen");
+    println(html);
+    println("");
+}
+
+fn demo() -> int {
+    match seite(false) {
+        Result::Ok(doc) => ausgeben(doc, "Ohne Fehler"),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    match seite(true) {
+        Result::Ok(doc) => ausgeben(doc, "Mit Fehler"),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}
+
+fn main() -> int {
+    return demo();
+}

@@ -1,0 +1,93 @@
+// Bausteine fuer Navigation und Status: Nav, Breadcrumbs, Alerts,
+// Badges, Buttons, Avatar, Progress, Skeleton, Pagination, Empty State.
+use std::ui;
+
+fn seite() -> Result<ui::UiNode, string> {
+    let doc = ui::document(ui::PageOptions {
+        title: "Bloom UI: Bausteine",
+        description: "Komponenten-Galerie",
+        lang: "de",
+        theme: "system",
+        stylesheet_href: "/ui.css"
+    })?;
+    let body = ui::body(doc);
+    let wrap = ui::container("xl")?;
+    ui::append(body, wrap);
+
+    let nav = ui::nav("Hauptnavigation");
+    ui::append(nav, ui::nav_link("/", "Start", true)?);
+    ui::append(nav, ui::nav_link("/berichte", "Berichte", false)?);
+    ui::append(nav, ui::nav_link("/team", "Team", false)?);
+    ui::append(wrap, nav);
+
+    let crumbs = ui::breadcrumbs("Pfad");
+    ui::append(crumbs, ui::breadcrumb("/", "Start")?);
+    ui::append(crumbs, ui::breadcrumb("/team", "Team")?);
+    ui::append(wrap, crumbs);
+
+    ui::append(wrap, ui::alert("Gespeichert.", "success")?);
+    ui::append(wrap, ui::alert("Pruefe deine Eingaben.", "warning")?);
+    ui::append(wrap, ui::alert("Etwas ist schiefgelaufen.", "danger")?);
+
+    let buttons = ui::card("Buttons");
+    ui::append(buttons, ui::button("Primaer", ui::ButtonOptions {
+        variant: "primary",
+        size: "md",
+        type_name: "button",
+        name: "primary",
+        value: "1",
+        disabled: false
+    })?);
+    ui::append(buttons, ui::button("Sekundaer", ui::ButtonOptions {
+        variant: "secondary",
+        size: "sm",
+        type_name: "button",
+        name: "secondary",
+        value: "2",
+        disabled: false
+    })?);
+    ui::append(buttons, ui::button("Gefahr", ui::ButtonOptions {
+        variant: "danger",
+        size: "lg",
+        type_name: "button",
+        name: "danger",
+        value: "3",
+        disabled: false
+    })?);
+    ui::append(buttons, ui::button("Deaktiviert", ui::ButtonOptions {
+        variant: "ghost",
+        size: "md",
+        type_name: "button",
+        name: "disabled",
+        value: "4",
+        disabled: true
+    })?);
+    ui::append(wrap, buttons);
+
+    let person = ui::card("Ada Lovelace");
+    ui::append(person, ui::avatar("/bilder/ada.png", "Portrait von Ada", "md")?);
+    ui::append(person, ui::badge("Mathematik", "info")?);
+    ui::append(person, ui::badge("aktiv", "success")?);
+    ui::append(person, ui::progress(72, 100, "Profil vollstaendig")?);
+    ui::append(wrap, person);
+
+    ui::append(wrap, ui::skeleton(3)?);
+    ui::append(wrap, ui::pagination(2, 7, "/berichte?sort=neu")?);
+    ui::append(wrap, ui::empty_state("Keine Berichte", "Lege den ersten Bericht an."));
+    return Result::Ok(doc);
+}
+
+fn ausgeben(doc: ui::UiNode) -> void {
+    match ui::render(doc) {
+        Result::Ok(html) => println(html),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+}
+
+fn main() -> int {
+    match seite() {
+        Result::Ok(doc) => ausgeben(doc),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}

@@ -1,0 +1,44 @@
+// Kleinste std::ui-Seite: Dokument, Ueberschrift, Text, Karte, Link.
+// Text und Attribute werden beim Rendern automatisch maskiert.
+use std::ui;
+
+fn seite() -> Result<ui::UiNode, string> {
+    let doc = ui::document(ui::PageOptions {
+        title: "Bloom UI: Hallo",
+        description: "Minimales Beispiel fuer std::ui",
+        lang: "de",
+        theme: "light",
+        stylesheet_href: "/assets/bloom-ui.css"
+    })?;
+    let body = ui::body(doc);
+    let wrap = ui::container("md")?;
+    ui::append(body, wrap);
+    ui::append(wrap, ui::heading(1, "Hallo, Bloom <UI> & Freunde")?);
+    ui::append(wrap, ui::muted_text("Dieser Text wird beim Rendern maskiert."));
+    let card = ui::card("Was du siehst");
+    ui::append(card, ui::text("<script>alert(1)</script> bleibt Text."));
+    ui::append(card, ui::link("/docs", "Zur Dokumentation")?);
+    ui::append(wrap, card);
+    return Result::Ok(doc);
+}
+
+fn zeigen(html: string) -> void {
+    println(html);
+    println("");
+    println("Stylesheet: " + str(len(ui::stylesheet())) + " Bytes");
+}
+
+fn ausgeben(doc: ui::UiNode) -> void {
+    match ui::render(doc) {
+        Result::Ok(html) => zeigen(html),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+}
+
+fn main() -> int {
+    match seite() {
+        Result::Ok(doc) => ausgeben(doc),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}

@@ -246,6 +246,20 @@ Tabelle voll, wird der älteste Fenstereintrag ersetzt, sodass die
 Speichernutzung beschränkt bleibt. Fehler bei `limiter_check` (leerer
 oder zu langer Schlüssel) verändern nichts. Alle Auth-Tests prüfen
 `live allocations: 0`.
+
+**Der UI-Baum (`std::ui::UiNode`, `Type::Ui`) ist ein verwalteter
+Besitzwert.** Jeder Element- und Textknoten zählt in
+`live allocations`; `bloom_ui_release` gibt Kinder, Attribute, Tag und
+Text rekursiv frei. `ui::append` erhöht den Zähler des Kindes, der vom
+Compiler erzeugte Drop des Temporärs senkt ihn wieder — ein Knoten lebt
+genau so lange, wie ihn der Baum oder ein Bloom-Handle hält. Fehler vor
+dem Anhängen geben den halbfertigen Knoten frei; ein fehlgeschlagenes
+`render` gibt den Ausgabepuffer frei. Checkbox- und Radio-Wrapper halten
+einen **geliehenen** Zeiger auf das innere `<input>` (das Kind besitzt
+es); Tabellen halten `thead`/`tbody` ebenfalls geliehen und besitzen sie
+nur über die Kinderliste. Alle UI-Tests inklusive des HTTP-Servers
+prüfen `live allocations: 0` und `live sockets: 0`.
+
 Alle Stdlib-Tests
 laufen unter `BLOOM_MEM_REPORT=1`. Getestet wird nativ mit MSVC
 (Windows). Valgrind/ASan sind auf dieser Toolchain nicht verfügbar und

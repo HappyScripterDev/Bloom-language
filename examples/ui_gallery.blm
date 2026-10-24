@@ -1,0 +1,198 @@
+// Galerie: alle std::ui-Bausteine auf einer Seite.
+use std::ui;
+
+fn ueberschriften(wrap: ui::UiNode) -> Result<ui::UiNode, string> {
+    let section = ui::section("Ueberschriften");
+    ui::append(section, ui::heading(1, "Ueberschrift 1")?);
+    ui::append(section, ui::heading(2, "Ueberschrift 2")?);
+    ui::append(section, ui::heading(3, "Ueberschrift 3")?);
+    ui::append(section, ui::heading(4, "Ueberschrift 4")?);
+    ui::append(section, ui::heading(5, "Ueberschrift 5")?);
+    ui::append(section, ui::heading(6, "Ueberschrift 6")?);
+    ui::append(section, ui::text("Normaler Text."));
+    ui::append(section, ui::muted_text("Gedaempfter Text."));
+    ui::append(section, ui::link("/dokumentation", "Ein Link")?);
+    ui::append(wrap, section);
+    return Result::Ok(wrap);
+}
+
+fn status(wrap: ui::UiNode) -> Result<ui::UiNode, string> {
+    let section = ui::section("Status");
+    let row = ui::row("sm", true)?;
+    ui::append(row, ui::badge("Standard", "")?);
+    ui::append(row, ui::badge("Info", "info")?);
+    ui::append(row, ui::badge("Erfolg", "success")?);
+    ui::append(row, ui::badge("Warnung", "warning")?);
+    ui::append(row, ui::badge("Fehler", "danger")?);
+    ui::append(section, row);
+    ui::append(section, ui::alert("Information", "info")?);
+    ui::append(section, ui::alert("Erfolgreich gespeichert", "success")?);
+    ui::append(section, ui::alert("Bitte pruefen", "warning")?);
+    ui::append(section, ui::alert("Fehlgeschlagen", "danger")?);
+    ui::append(wrap, section);
+    return Result::Ok(wrap);
+}
+
+fn aktionen(wrap: ui::UiNode) -> Result<ui::UiNode, string> {
+    let section = ui::section("Buttons");
+    let row = ui::row("sm", true)?;
+    ui::append(row, ui::button("Primaer", ui::ButtonOptions {
+        variant: "primary",
+        size: "md",
+        type_name: "button",
+        name: "a",
+        value: "1",
+        disabled: false
+    })?);
+    ui::append(row, ui::button("Sekundaer", ui::ButtonOptions {
+        variant: "secondary",
+        size: "md",
+        type_name: "button",
+        name: "b",
+        value: "2",
+        disabled: false
+    })?);
+    ui::append(row, ui::button("Ghost", ui::ButtonOptions {
+        variant: "ghost",
+        size: "sm",
+        type_name: "button",
+        name: "c",
+        value: "3",
+        disabled: false
+    })?);
+    ui::append(row, ui::button("Gefahr", ui::ButtonOptions {
+        variant: "danger",
+        size: "lg",
+        type_name: "button",
+        name: "d",
+        value: "4",
+        disabled: false
+    })?);
+    ui::append(row, ui::button("Aus", ui::ButtonOptions {
+        variant: "primary",
+        size: "md",
+        type_name: "button",
+        name: "e",
+        value: "5",
+        disabled: true
+    })?);
+    ui::append(section, row);
+    ui::append(wrap, section);
+    return Result::Ok(wrap);
+}
+
+fn formulare(wrap: ui::UiNode) -> Result<ui::UiNode, string> {
+    let section = ui::section("Formulare");
+    let form = ui::form(ui::FormOptions {
+        action: "/galerie",
+        method: "post"
+    })?;
+    let name = ui::input(ui::InputOptions {
+        type_name: "text",
+        name: "name",
+        value: "",
+        id: "name",
+        placeholder: "Name",
+        required: true,
+        disabled: false
+    })?;
+    ui::append(form, ui::field(name, "name", "Name", "", "")?);
+    let mail = ui::input(ui::InputOptions {
+        type_name: "email",
+        name: "email",
+        value: "",
+        id: "email",
+        placeholder: "mail@example.com",
+        required: true,
+        disabled: false
+    })?;
+    ui::append(form, ui::field(mail, "email", "E-Mail", "Nur intern sichtbar.", "")?);
+    let area = ui::textarea("nachricht", "Hallo", 3, "nachricht")?;
+    ui::append(form, ui::field(area, "nachricht", "Nachricht", "", "")?);
+    let select = ui::select("thema", "thema", false)?;
+    ui::append(select, ui::option("ui", "UI"));
+    ui::append(select, ui::option("api", "API"));
+    ui::append(form, select);
+    ui::append(form, ui::checkbox("kopie", "ja", "kopie")?);
+    ui::append(form, ui::label("Kopie per E-Mail", "kopie")?);
+    ui::append(form, ui::radio("kontakt", "mail", "kontakt-mail")?);
+    ui::append(form, ui::label("Per E-Mail", "kontakt-mail")?);
+    ui::append(form, ui::radio("kontakt", "telefon", "kontakt-telefon")?);
+    ui::append(form, ui::label("Per Telefon", "kontakt-telefon")?);
+    ui::append(form, ui::submit_button("Senden"));
+    ui::append(section, form);
+    ui::append(wrap, section);
+    return Result::Ok(wrap);
+}
+
+fn daten(wrap: ui::UiNode) -> Result<ui::UiNode, string> {
+    let section = ui::section("Daten");
+    let table = ui::table(ui::TableOptions { caption: "Werte" })?;
+    let head = ui::table_row(table, true)?;
+    ui::table_header_cell(head, "Name")?;
+    ui::table_header_cell(head, "Wert")?;
+    let row = ui::table_row(table, false)?;
+    ui::table_cell(row, "Antwort")?;
+    ui::table_cell(row, "42")?;
+    ui::append(section, table);
+    ui::append(section, ui::avatar("/bild.png", "Profilbild", "lg")?);
+    ui::append(section, ui::progress(3, 4, "Fortschritt")?);
+    ui::append(section, ui::skeleton(2)?);
+    ui::append(section, ui::pagination(1, 3, "/galerie")?);
+    ui::append(section, ui::empty_state("Leer", "Noch keine Daten."));
+    ui::append(wrap, section);
+    return Result::Ok(wrap);
+}
+
+fn seite() -> Result<ui::UiNode, string> {
+    let doc = ui::document(ui::PageOptions {
+        title: "Bloom UI: Galerie",
+        description: "Alle Bausteine",
+        lang: "de",
+        theme: "light",
+        stylesheet_href: "/ui.css"
+    })?;
+    let body = ui::body(doc);
+    let wrap = ui::container("xl")?;
+    ui::append(body, wrap);
+    let nav = ui::nav("Hauptnavigation");
+    ui::append(nav, ui::nav_link("/", "Start", true)?);
+    ui::append(nav, ui::nav_link("/galerie", "Galerie", false)?);
+    ui::append(wrap, nav);
+    let crumbs = ui::breadcrumbs("Pfad");
+    ui::append(crumbs, ui::breadcrumb("/", "Start")?);
+    ui::append(crumbs, ui::breadcrumb("/galerie", "Galerie")?);
+    ui::append(wrap, crumbs);
+    ui::append(wrap, ui::heading(1, "Galerie")?);
+    ueberschriften(wrap)?;
+    ui::append(wrap, ui::divider());
+    status(wrap)?;
+    ui::append(wrap, ui::divider());
+    aktionen(wrap)?;
+    ui::append(wrap, ui::divider());
+    formulare(wrap)?;
+    ui::append(wrap, ui::divider());
+    daten(wrap)?;
+    return Result::Ok(doc);
+}
+
+fn ausgeben(doc: ui::UiNode) -> void {
+    match ui::render(doc) {
+        Result::Ok(html) => zeigen(html),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+}
+
+fn zeigen(html: string) -> void {
+    println(html);
+    println("");
+    println("Galerie: " + str(len(html)) + " Zeichen");
+}
+
+fn main() -> int {
+    match seite() {
+        Result::Ok(doc) => ausgeben(doc),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}

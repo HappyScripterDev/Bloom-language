@@ -1,0 +1,78 @@
+// Dashboard: Navigation, Kennzahlen-Karten im Grid, Tabelle, Pagination.
+use std::ui;
+
+fn kennzahl(titel: string, wert: int, max: int, variante: string) -> Result<ui::UiNode, string> {
+    let card = ui::card(titel);
+    ui::append(card, ui::badge("Live", variante)?);
+    ui::append(card, ui::heading(2, str(wert))?);
+    ui::append(card, ui::progress(wert, max, "Auslastung")?);
+    return Result::Ok(card);
+}
+
+fn tabelle() -> Result<ui::UiNode, string> {
+    let table = ui::table(ui::TableOptions {
+        caption: "Letzte Bestellungen"
+    })?;
+    let head = ui::table_row(table, true)?;
+    ui::table_header_cell(head, "Nummer")?;
+    ui::table_header_cell(head, "Betrag")?;
+    let row1 = ui::table_row(table, false)?;
+    ui::table_cell(row1, "#1001")?;
+    ui::table_cell(row1, "49,00 EUR")?;
+    let row2 = ui::table_row(table, false)?;
+    ui::table_cell(row2, "#1002")?;
+    ui::table_cell(row2, "120,50 EUR")?;
+    return Result::Ok(table);
+}
+
+fn seite() -> Result<ui::UiNode, string> {
+    let doc = ui::document(ui::PageOptions {
+        title: "Bloom UI: Dashboard",
+        description: "Dashboard-Beispiel",
+        lang: "de",
+        theme: "dark",
+        stylesheet_href: "/ui.css"
+    })?;
+    let body = ui::body(doc);
+    let wrap = ui::container("xl")?;
+    ui::append(body, wrap);
+    let nav = ui::nav("Hauptnavigation");
+    ui::append(nav, ui::nav_link("/", "Uebersicht", true)?);
+    ui::append(nav, ui::nav_link("/bestellungen", "Bestellungen", false)?);
+    ui::append(wrap, nav);
+    let crumbs = ui::breadcrumbs("Pfad");
+    ui::append(crumbs, ui::breadcrumb("/", "Start")?);
+    ui::append(crumbs, ui::breadcrumb("/dashboard", "Dashboard")?);
+    ui::append(wrap, crumbs);
+    ui::append(wrap, ui::heading(1, "Uebersicht")?);
+    let grid = ui::grid(3, "md")?;
+    ui::append(grid, kennzahl("Bestellungen", 128, 200, "info")?);
+    ui::append(grid, kennzahl("Umsatz", 76, 100, "success")?);
+    ui::append(grid, kennzahl("Offene Tickets", 9, 50, "warning")?);
+    ui::append(wrap, grid);
+    ui::append(wrap, ui::alert("Wartungsfenster am Sonntag, 02:00 UTC.", "info")?);
+    ui::append(wrap, tabelle()?);
+    ui::append(wrap, ui::pagination(1, 4, "/bestellungen?sort=neu")?);
+    return Result::Ok(doc);
+}
+
+fn ausgeben(doc: ui::UiNode) -> void {
+    match ui::render(doc) {
+        Result::Ok(html) => zeigen(html),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+}
+
+fn zeigen(html: string) -> void {
+    println(html);
+    println("");
+    println("Dashboard: " + str(len(html)) + " Zeichen");
+}
+
+fn main() -> int {
+    match seite() {
+        Result::Ok(doc) => ausgeben(doc),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}

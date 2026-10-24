@@ -9278,6 +9278,1013 @@ fn wait_expiry(store: web::SessionStore, session: web::Session) -> void {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+fn run_ui_native(dir: &PathBuf, name: &str, source: &str, needles: &[&str]) -> Option<String> {
+    let src = dir.join(format!("{name}.blm"));
+    write_file(&src, source);
+    let exe = dir.join(if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    });
+    let build = run_bloom(&[
+        "build",
+        src.to_string_lossy().as_ref(),
+        "-o",
+        exe.to_string_lossy().as_ref(),
+    ]);
+    if no_toolchain(&build) {
+        eprintln!("skipping: no C toolchain available");
+        return None;
+    }
+    assert_eq!(build.code, 0, "{}", build.combined());
+    let out = Command::new(&exe)
+        .env("BLOOM_MEM_REPORT", "1")
+        .current_dir(dir)
+        .output()
+        .expect("run ui program");
+    let stdout = norm(&String::from_utf8_lossy(&out.stdout));
+    let stderr = norm(&String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.status.code(), Some(0), "{name}: {stdout}\n{stderr}");
+    for needle in needles {
+        assert!(
+            stdout.contains(needle),
+            "{name}: missing `{needle}` in {stdout}"
+        );
+    }
+    assert!(stderr.contains("live allocations: 0"), "{name}: {stderr}");
+    Some(stdout)
+}
+
+#[test]
+fn ui_rendering_natively() {
+    let dir = temp_dir("ui-rendering");
+    let source = r#"use std::ui;
+
+fn build() -> Result<ui::UiNode, string> {
+    let doc = ui::document(ui::PageOptions {
+        title: "T <x> & \"q\"",
+        description: "Beschreibung <b> & \"z\"",
+        lang: "de-AT",
+        theme: "light",
+        stylesheet_href: "/assets/ui.css"
+    })?;
+    let body = ui::body(doc);
+    let wrap = ui::container("md")?;
+    ui::append(body, wrap);
+    ui::append(wrap, ui::heading(1, "A <b> & \"c\"")?);
+    ui::append(wrap, ui::text("<script>alert(1)</script>"));
+    ui::append(wrap, ui::input(ui::InputOptions {
+        type_name: "text",
+        name: "feld",
+        value: "a\"b&c",
+        id: "feld",
+        placeholder: "x\"y",
+        required: true,
+        disabled: false
+    })?);
+    ui::append(wrap, ui::checkbox("agb", "ja", "agb")?);
+    return Result::Ok(doc);
+}
+
+fn defaults() -> Result<ui::UiNode, string> {
+    let doc = ui::document(ui::PageOptions {
+        title: "Standard",
+        description: "",
+        lang: "",
+        theme: "",
+        stylesheet_href: ""
+    })?;
+    return Result::Ok(doc);
+}
+
+fn check_main(html: string) -> void {
+    println("doctype=" + str(starts_with(html, "<!doctype html>")));
+    println("title=" + str(contains(html, "<title>T &lt;x&gt; &amp; &quot;q&quot;</title>")));
+    println("desc=" + str(contains(html, "content=\"Beschreibung &lt;b&gt; &amp; &quot;z&quot;\"")));
+    println("heading=" + str(contains(html, "A &lt;b&gt; &amp; &quot;c&quot;</h1>")));
+    println("script=" + str(!contains(html, "<script>")));
+    println("value=" + str(contains(html, "value=\"a&quot;b&amp;c\"")));
+    println("placeholder=" + str(contains(html, "placeholder=\"x&quot;y\"")));
+    println("void=" + str(!contains(html, "</input>") && !contains(html, "</meta>")));
+    println("lang=" + str(contains(html, "lang=\"de-AT\"")));
+    println("theme=" + str(contains(html, "data-theme=\"light\"")));
+    println("href=" + str(contains(html, "href=\"/assets/ui.css\"")));
+}
+
+fn check_defaults(html: string) -> void {
+    println("default-theme=" + str(contains(html, "data-theme=\"light\"")));
+    println("default-lang=" + str(!contains(html, "lang=")));
+    println("nodesc=" + str(!contains(html, "name=\"description\"")));
+    println("default-href=" + str(contains(html, "href=\"/ui.css\"")));
+    println("default-body=" + str(contains(html, "<body class=\"ui-body\">")));
+}
+
+fn run() -> Result<int, string> {
+    let doc = build()?;
+    match ui::render(doc) {
+        Result::Ok(html) => check_main(html),
+        Result::Err(e) => println("render: " + e)
+    };
+    let plain = defaults()?;
+    match ui::render(plain) {
+        Result::Ok(html) => check_defaults(html),
+        Result::Err(e) => println("render: " + e)
+    };
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(_) => 1
+    };
+}
+"#;
+    let needles = &[
+        "doctype=true",
+        "title=true",
+        "desc=true",
+        "heading=true",
+        "script=true",
+        "value=true",
+        "placeholder=true",
+        "void=true",
+        "lang=true",
+        "theme=true",
+        "href=true",
+        "default-theme=true",
+        "default-lang=true",
+        "nodesc=true",
+        "default-href=true",
+        "default-body=true",
+    ];
+    if run_ui_native(&dir, "ui_rendering", source, needles).is_none() {
+        return;
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ui_security_natively() {
+    let dir = temp_dir("ui-security");
+    let source = r##"use std::ui;
+
+fn show(label: string, ok: bool) -> void {
+    if ok {
+        println(label + "=accepted");
+    } else {
+        println(label + "=rejected");
+    }
+}
+
+fn link_case(label: string, href: string) -> void {
+    match ui::link(href, "x") {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn doc_case(label: string, title: string, theme: string, lang: string, href: string) -> void {
+    match ui::document(ui::PageOptions {
+        title: title,
+        description: "",
+        lang: lang,
+        theme: theme,
+        stylesheet_href: href
+    }) {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn input_case(label: string, type_name: string, name: string, value: string) -> void {
+    match ui::input(ui::InputOptions {
+        type_name: type_name,
+        name: name,
+        value: value,
+        id: "feld",
+        placeholder: "",
+        required: false,
+        disabled: false
+    }) {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn button_case(label: string, variant: string, size: string, type_name: string) -> void {
+    match ui::button("X", ui::ButtonOptions {
+        variant: variant,
+        size: size,
+        type_name: type_name,
+        name: "x",
+        value: "1",
+        disabled: false
+    }) {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn form_case(label: string, action: string, method: string) -> void {
+    match ui::form(ui::FormOptions { action: action, method: method }) {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn heading_case(label: string, level: int) -> void {
+    match ui::heading(level, "x") {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn grid_case(label: string, columns: int) -> void {
+    match ui::grid(columns, "md") {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn stack_case(label: string, gap: string) -> void {
+    match ui::stack(gap) {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn textarea_case(label: string, rows: int) -> void {
+    match ui::textarea("feld", "", rows, "feld") {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn skeleton_case(label: string, lines: int) -> void {
+    match ui::skeleton(lines) {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn progress_case(label: string, value: int, max: int, text: string) -> void {
+    match ui::progress(value, max, text) {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn avatar_case(label: string, src: string, alt: string, size: string) -> void {
+    match ui::avatar(src, alt, size) {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn pagination_case(label: string, current: int, total: int) -> void {
+    match ui::pagination(current, total, "/liste") {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn badge_case(label: string, variant: string) -> void {
+    match ui::badge("X", variant) {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn alert_case(label: string, variant: string) -> void {
+    match ui::alert("X", variant) {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn class_case(label: string, classes: string) -> void {
+    let ok = match ui::set_class(ui::text("x"), classes) {
+        Result::Ok(v) => v,
+        Result::Err(e) => false
+    };
+    show(label, ok);
+}
+
+fn field_case(label: string, id: string, help: string) -> void {
+    let control = ui::text("x");
+    match ui::field(control, id, "Label", help, "") {
+        Result::Ok(_) => show(label, true),
+        Result::Err(_) => show(label, false)
+    };
+}
+
+fn main() -> int {
+    link_case("js", "javascript:alert(1)");
+    link_case("vb", "vbscript:msgbox(1)");
+    link_case("data", "data:text/html,<b>");
+    link_case("mailto", "mailto:a@b.c");
+    link_case("schemeless", "//evil.example");
+    link_case("backslash", "/a\\b");
+    link_case("space", "/a b");
+    link_case("http", "https://example.com/a?b=1");
+    link_case("root", "/pfad");
+    link_case("rel", "relativ.html");
+    link_case("frag", "#oben");
+    println("id-ok=" + str(ui::set_id(ui::text("x"), "gut-1")));
+    println("id-first=" + str(ui::set_id(ui::text("x"), "-schlecht")));
+    println("id-space=" + str(ui::set_id(ui::text("x"), "a b")));
+    println("id-attr=" + str(ui::set_id(ui::text("x"), "a\"b")));
+    class_case("class-ok", "eins zwei");
+    class_case("class-bad", "eins! zwei");
+    heading_case("heading-0", 0);
+    heading_case("heading-7", 7);
+    grid_case("grid-0", 0);
+    grid_case("grid-13", 13);
+    stack_case("stack-gap", "huge");
+    input_case("input-name", "text", "a b", "");
+    input_case("input-type", "custom", "feld", "");
+    input_case("input-value", "text", "feld", "a\tb");
+    button_case("button-variant", "neon", "md", "button");
+    button_case("button-size", "primary", "xl", "button");
+    button_case("button-type", "primary", "md", "link");
+    form_case("form-method", "/x", "put");
+    form_case("form-action", "javascript:x", "post");
+    doc_case("doc-theme", "T", "neon", "de", "");
+    doc_case("doc-lang", "T", "light", "de_DE", "");
+    doc_case("doc-href", "T", "light", "de", "javascript:x");
+    doc_case("doc-title", "a\tb", "light", "de", "");
+    textarea_case("textarea-low", 0);
+    textarea_case("textarea-high", 41);
+    skeleton_case("skeleton-low", 0);
+    skeleton_case("skeleton-high", 21);
+    progress_case("progress-max", 1, 0, "");
+    progress_case("progress-value", 11, 10, "");
+    progress_case("progress-label", 1, 10, "a\tb");
+    avatar_case("avatar-src", "javascript:x", "Ada", "md");
+    avatar_case("avatar-size", "/a.png", "Ada", "xl");
+    avatar_case("avatar-alt", "/a.png", "a\tb", "md");
+    pagination_case("pagination-low", 0, 5);
+    pagination_case("pagination-high", 6, 5);
+    pagination_case("pagination-max", 1, 10001);
+    badge_case("badge", "neon");
+    alert_case("alert", "neon");
+    field_case("field-id", "a b", "");
+    field_case("field-help", "feld", "a\tb");
+    return 0;
+}
+"##;
+    let needles = &[
+        "js=rejected",
+        "vb=rejected",
+        "data=rejected",
+        "mailto=rejected",
+        "schemeless=rejected",
+        "backslash=rejected",
+        "space=rejected",
+        "http=accepted",
+        "root=accepted",
+        "rel=accepted",
+        "frag=accepted",
+        "id-ok=true",
+        "id-first=false",
+        "id-space=false",
+        "id-attr=false",
+        "class-ok=accepted",
+        "class-bad=rejected",
+        "heading-0=rejected",
+        "heading-7=rejected",
+        "grid-0=rejected",
+        "grid-13=rejected",
+        "stack-gap=rejected",
+        "input-name=rejected",
+        "input-type=rejected",
+        "input-value=rejected",
+        "button-variant=rejected",
+        "button-size=rejected",
+        "button-type=rejected",
+        "form-method=rejected",
+        "form-action=rejected",
+        "doc-theme=rejected",
+        "doc-lang=rejected",
+        "doc-href=rejected",
+        "doc-title=rejected",
+        "textarea-low=rejected",
+        "textarea-high=rejected",
+        "skeleton-low=rejected",
+        "skeleton-high=rejected",
+        "progress-max=rejected",
+        "progress-value=rejected",
+        "progress-label=rejected",
+        "avatar-src=rejected",
+        "avatar-size=rejected",
+        "avatar-alt=rejected",
+        "pagination-low=rejected",
+        "pagination-high=rejected",
+        "pagination-max=rejected",
+        "badge=rejected",
+        "alert=rejected",
+        "field-id=rejected",
+        "field-help=rejected",
+    ];
+    if run_ui_native(&dir, "ui_security", source, needles).is_none() {
+        return;
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn run_ui_example(dir: &PathBuf, name: &str, needles: &[&str]) -> Option<()> {
+    let exe = dir.join(if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    });
+    let build = run_bloom(&[
+        "build",
+        &example(&format!("{name}.blm")),
+        "-o",
+        exe.to_string_lossy().as_ref(),
+    ]);
+    if no_toolchain(&build) {
+        eprintln!("skipping: no C toolchain available");
+        return None;
+    }
+    assert_eq!(build.code, 0, "{}", build.combined());
+    let out = Command::new(&exe)
+        .env("BLOOM_MEM_REPORT", "1")
+        .current_dir(dir)
+        .output()
+        .expect("run ui example");
+    let stdout = norm(&String::from_utf8_lossy(&out.stdout));
+    let stderr = norm(&String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.status.code(), Some(0), "{name}: {stdout}\n{stderr}");
+    for needle in needles {
+        assert!(
+            stdout.contains(needle),
+            "{name}: missing `{needle}` in {stdout}"
+        );
+    }
+    assert!(stderr.contains("live allocations: 0"), "{name}: {stderr}");
+    Some(())
+}
+
+#[test]
+fn ui_components_natively() {
+    let dir = temp_dir("ui-components");
+    let source = r#"use std::ui;
+
+fn count(html: string, needle: string) -> int {
+    return len(split(html, needle)) - 1;
+}
+
+fn build() -> Result<ui::UiNode, string> {
+    let doc = ui::document(ui::PageOptions {
+        title: "Komponenten",
+        description: "",
+        lang: "de",
+        theme: "light",
+        stylesheet_href: "/ui.css"
+    })?;
+    let body = ui::body(doc);
+    let wrap = ui::container("lg")?;
+    ui::append(body, wrap);
+
+    let nav = ui::nav("Hauptnavigation");
+    ui::append(nav, ui::nav_link("/", "Start", true)?);
+    ui::append(nav, ui::nav_link("/zwei", "Zwei", false)?);
+    ui::append(wrap, nav);
+    let crumbs = ui::breadcrumbs("Pfad");
+    ui::append(crumbs, ui::breadcrumb("/", "Start")?);
+    ui::append(wrap, crumbs);
+
+    let form = ui::form(ui::FormOptions {
+        action: "/speichern",
+        method: "post"
+    })?;
+    ui::append(form, ui::label("E-Mail", "email")?);
+    ui::append(form, ui::input(ui::InputOptions {
+        type_name: "email",
+        name: "email",
+        value: "a\"b&c",
+        id: "email",
+        placeholder: "du@example.com",
+        required: true,
+        disabled: false
+    })?);
+    let msg_area = ui::textarea("notizen", "Hallo <Welt>", 3, "notizen")?;
+    ui::append(form, ui::field(
+        msg_area,
+        "notizen",
+        "Notizen",
+        "Hilfe <hier>",
+        ""
+    )?);
+    let probe = ui::textarea("pruefung", "", 2, "pruefung")?;
+    ui::append(form, ui::field(
+        probe,
+        "pruefung",
+        "Pruefung",
+        "Hilfe",
+        "Fehler <da>"
+    )?);
+    let select = ui::select("plan", "plan", false)?;
+    let free = ui::option("free", "Free");
+    let team = ui::option("team", "Team");
+    println("select-option=" + str(ui::select_option(team)));
+    ui::append(select, free);
+    ui::append(select, team);
+    ui::append(form, select);
+    let terms = ui::checkbox("agb", "ja", "agb")?;
+    println("check=" + str(ui::check(terms)));
+    ui::append(form, terms);
+    ui::append(form, ui::submit_button("Senden"));
+    ui::append(wrap, form);
+
+    let table = ui::table(ui::TableOptions { caption: "Werte" })?;
+    let head = ui::table_row(table, true)?;
+    ui::table_header_cell(head, "Name")?;
+    ui::table_header_cell(head, "Wert")?;
+    let row = ui::table_row(table, false)?;
+    ui::table_cell(row, "Antwort")?;
+    ui::table_cell(row, "42")?;
+    ui::append(wrap, table);
+
+    ui::append(wrap, ui::badge("Neu", "info")?);
+    ui::append(wrap, ui::alert("Gespeichert", "success")?);
+    ui::append(wrap, ui::avatar("/a.png", "Ada <Lovelace>", "sm")?);
+    ui::append(wrap, ui::progress(3, 10, "Fortschritt <1>")?);
+    ui::append(wrap, ui::skeleton(2)?);
+    ui::append(wrap, ui::pagination(2, 3, "/liste")?);
+    ui::append(wrap, ui::pagination(1, 2, "/suche?q=ui")?);
+    ui::append(wrap, ui::empty_state("Leer", "Nichts da."));
+
+    let hint = ui::text("Notiz");
+    match ui::set_class(hint, "eins zwei") {
+        Result::Ok(_) => println("class=ok"),
+        Result::Err(e) => println("class-fehler: " + e)
+    };
+    println("id=" + str(ui::set_id(hint, "notiz")));
+    println("aria=" + str(ui::set_aria_label(hint, "Hinweis")));
+    ui::append(wrap, hint);
+    return Result::Ok(doc);
+}
+
+fn check(html: string) -> void {
+    println("tr=" + str(count(html, "<tr>")));
+    println("th=" + str(count(html, "<th ")));
+    println("td=" + str(count(html, "<td>")));
+    println("nav-current=" + str(contains(html, "href=\"/\" aria-current=\"page\">Start")));
+    println("label=" + str(contains(html, "for=\"email\">E-Mail</label>")));
+    println("input-value=" + str(contains(html, "value=\"a&quot;b&amp;c\"")));
+    println("textarea=" + str(contains(html, "id=\"notizen\" rows=\"3\" aria-describedby=\"notizen-help\">Hallo &lt;Welt&gt;</textarea>")));
+    println("help=" + str(contains(html, "id=\"notizen-help\">Hilfe &lt;hier&gt;</p>")));
+    println("help-desc=" + str(contains(html, "aria-describedby=\"notizen-help\"")));
+    println("error-desc=" + str(contains(html, "aria-describedby=\"pruefung-help pruefung-error\"")));
+    println("error-invalid=" + str(contains(html, "aria-invalid=\"true\"")));
+    println("selected=" + str(contains(html, "<option value=\"team\" selected>Team</option>")));
+    println("checked=" + str(contains(html, "id=\"agb\" checked>")));
+    println("checkbox-desc=" + str(contains(html, "aria-describedby=\"agb-help\"")));
+    println("page=" + str(contains(html, "href=\"/liste?page=2\" aria-current=\"page\"")));
+    println("query=" + str(contains(html, "href=\"/suche?q=ui&amp;page=1\" aria-current=\"page\"")));
+    println("avatar=" + str(contains(html, "alt=\"Ada &lt;Lovelace&gt;\"")));
+    println("progress=" + str(contains(html, "max=\"10\" value=\"3\" aria-label=\"Fortschritt &lt;1&gt;\"")));
+    println("skeleton=" + str(count(html, "<span>")));
+    println("mutate=" + str(contains(html, "<p class=\"ui-text eins zwei\" id=\"notiz\" aria-label=\"Hinweis\">Notiz</p>")));
+    println("empty=" + str(contains(html, "Nichts da.")));
+}
+
+fn run() -> Result<int, string> {
+    let doc = build()?;
+    match ui::render(doc) {
+        Result::Ok(html) => check(html),
+        Result::Err(e) => println("render: " + e)
+    };
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(_) => 1
+    };
+}
+"#;
+    let needles = &[
+        "select-option=true",
+        "check=true",
+        "class=ok",
+        "id=true",
+        "aria=true",
+        "tr=2",
+        "th=2",
+        "td=2",
+        "nav-current=true",
+        "label=true",
+        "input-value=true",
+        "textarea=true",
+        "help=true",
+        "help-desc=true",
+        "error-desc=true",
+        "error-invalid=true",
+        "selected=true",
+        "checked=true",
+        "page=true",
+        "query=true",
+        "avatar=true",
+        "progress=true",
+        "skeleton=2",
+        "mutate=true",
+        "empty=true",
+    ];
+    if run_ui_native(&dir, "ui_components", source, needles).is_none() {
+        return;
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ui_themes_natively() {
+    let dir = temp_dir("ui-themes");
+    let source = r#"use std::ui;
+
+fn doc(theme: string) -> Result<ui::UiNode, string> {
+    let d = ui::document(ui::PageOptions {
+        title: "Themes",
+        description: "",
+        lang: "de",
+        theme: theme,
+        stylesheet_href: "/ui.css"
+    })?;
+    let b = ui::body(d);
+    let w = ui::container("sm")?;
+    ui::append(b, w);
+    ui::append(w, ui::heading(1, "Hallo")?);
+    return Result::Ok(d);
+}
+
+fn show(theme: string) -> void {
+    match doc(theme) {
+        Result::Ok(d) => render_theme(d, theme),
+        Result::Err(e) => println(theme + "=error")
+    };
+}
+
+fn render_theme(d: ui::UiNode, theme: string) -> void {
+    match ui::render(d) {
+        Result::Ok(html) => println(theme + "=" + str(contains(html, "data-theme=\"" + theme + "\""))),
+        Result::Err(e) => println(theme + "=error")
+    };
+}
+
+fn show_default() -> void {
+    match doc("") {
+        Result::Ok(d) => render_default(d),
+        Result::Err(e) => println("default=error")
+    };
+}
+
+fn render_default(d: ui::UiNode) -> void {
+    match ui::render(d) {
+        Result::Ok(html) => println("default=" + str(contains(html, "data-theme=\"light\""))),
+        Result::Err(e) => println("default=error")
+    };
+}
+
+fn main() -> int {
+    show("light");
+    show("dark");
+    show("system");
+    show_default();
+    let css = ui::stylesheet();
+    println("css-len=" + str(len(css) > 10000));
+    println("css-root=" + str(contains(css, ":root")));
+    println("css-dark=" + str(contains(css, "[data-theme=\"dark\"]")));
+    println("css-system=" + str(contains(css, "prefers-color-scheme")));
+    println("css-motion=" + str(contains(css, "prefers-reduced-motion")));
+    println("css-media=" + str(contains(css, "@media (max-width: 720px)")));
+    println("css-btn=" + str(contains(css, ".ui-btn")));
+    println("css-table=" + str(contains(css, ".ui-table")));
+    println("css-token=" + str(contains(css, "--ui-bg")));
+    return 0;
+}
+"#;
+    let needles = &[
+        "light=true",
+        "dark=true",
+        "system=true",
+        "default=true",
+        "css-len=true",
+        "css-root=true",
+        "css-dark=true",
+        "css-system=true",
+        "css-motion=true",
+        "css-media=true",
+        "css-btn=true",
+        "css-table=true",
+        "css-token=true",
+    ];
+    if run_ui_native(&dir, "ui_themes", source, needles).is_none() {
+        return;
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ui_examples_natively() {
+    let dir = temp_dir("ui-examples");
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "ui_hello",
+            &[
+                "<!doctype html>",
+                "Hallo, Bloom &lt;UI&gt; &amp; Freunde",
+                "&lt;script&gt;alert(1)&lt;/script&gt; bleibt Text.",
+                "Stylesheet: ",
+            ],
+        ),
+        (
+            "ui_layouts",
+            &[
+                "data-width=\"lg\"",
+                "data-columns=\"3\"",
+                "Feld 6",
+                "ui-divider",
+                "Responsiv",
+            ],
+        ),
+        (
+            "ui_components",
+            &[
+                "aria-label=\"Hauptnavigation\"",
+                "aria-current=\"page\">Start",
+                "disabled>Deaktiviert",
+                "aria-label=\"Pagination\"",
+                "<progress",
+                "Keine Berichte",
+            ],
+        ),
+        (
+            "ui_forms",
+            &[
+                "for=\"email\">E-Mail-Adresse",
+                "<select",
+                "<option value=\"team\">Team</option>",
+                "type=\"checkbox\"",
+                "type=\"radio\"",
+                "aria-describedby=\"notizen-help\"",
+            ],
+        ),
+    ];
+    for (name, needles) in cases {
+        if run_ui_example(&dir, name, needles).is_none() {
+            return;
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ui_examples_more_natively() {
+    let dir = temp_dir("ui-examples-more");
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "ui_table",
+            &[
+                "<caption>Teammitglieder</caption>",
+                "<th scope=\"col\">Name</th>",
+                "<td>Ada Lovelace</td>",
+                "<td>Alan &lt;Turing&gt;</td>",
+                "Keine weiteren Eintraege",
+            ],
+        ),
+        (
+            "ui_themes",
+            &[
+                "bloom-ui.css: ",
+                "light.html: ",
+                "dark.html: ",
+                "system.html: ",
+                "Demo-Dateien wieder entfernt.",
+            ],
+        ),
+        (
+            "ui_dashboard",
+            &[
+                "data-theme=\"dark\"",
+                "Dashboard: ",
+                "#1001",
+                "Offene Tickets",
+                "aria-current=\"page\">1",
+            ],
+        ),
+        (
+            "ui_login_page",
+            &[
+                "Ohne Fehler: ",
+                "Mit Fehler: ",
+                "aria-invalid=\"true\"",
+                "Bitte pruefe die Adresse.",
+                "E-Mail oder Passwort ist falsch.",
+            ],
+        ),
+        (
+            "ui_gallery",
+            &[
+                "data-theme=\"light\"",
+                "Ueberschrift 6",
+                "data-variant=\"ghost\"",
+                "id=\"kontakt-telefon\"",
+                "Galerie: ",
+            ],
+        ),
+    ];
+    for (name, needles) in cases {
+        if run_ui_example(&dir, name, needles).is_none() {
+            return;
+        }
+    }
+    assert!(
+        !dir.join("bloom_ui_demo").exists(),
+        "ui_themes must clean up its demo directory"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ui_http_app_e2e() {
+    use std::io::{Read, Write};
+
+    let dir = temp_dir("ui-http-app");
+    let src = dir.join("ui_server.blm");
+    write_file(
+        &src,
+        r#"use std::http;
+use std::net;
+use std::ui;
+
+fn ok_int(r: Result<int, string>) -> int {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => -1
+    };
+}
+
+fn page() -> Result<ui::UiNode, string> {
+    let doc = ui::document(ui::PageOptions {
+        title: "UI Server",
+        description: "Seite vom std::ui-Server",
+        lang: "de",
+        theme: "dark",
+        stylesheet_href: "/ui.css"
+    })?;
+    let body = ui::body(doc);
+    let wrap = ui::container("md")?;
+    ui::append(body, wrap);
+    ui::append(wrap, ui::heading(1, "Hallo <Server> & Co")?);
+    ui::append(wrap, ui::alert("gespeichert", "success")?);
+    return Result::Ok(doc);
+}
+
+fn respond(conn: int, doc: ui::UiNode, target: string) -> void {
+    if target == "/ui.css" {
+        match ui::send_stylesheet(conn) {
+            Result::Ok(_) => println("css"),
+            Result::Err(e) => println("css-fehler: " + e)
+        };
+    } else {
+        match ui::send_page(conn, 200, doc, "Cache-Control: no-store\r\nX-UI-Test: ja") {
+            Result::Ok(_) => println("seite"),
+            Result::Err(e) => println("seiten-fehler: " + e)
+        };
+    }
+}
+
+fn handle(conn: int, doc: ui::UiNode) -> void {
+    match http::read_request(conn) {
+        Result::Ok(req) => respond(conn, doc, req.target),
+        Result::Err(e) => send_bad(conn)
+    };
+}
+
+fn send_bad(conn: int) -> void {
+    match http::write_response(conn, 400, "text/plain; charset=utf-8", "fehler") {
+        Result::Ok(_) => println("bad"),
+        Result::Err(e) => println("bad-fehler: " + e)
+    };
+}
+
+fn serve(doc: ui::UiNode) -> void {
+    let listener = ok_int(net::tcp_listen("127.0.0.1", 0, 4));
+    if listener < 0 {
+        println("listen-fehler");
+        return;
+    }
+    println(ok_int(net::local_port(listener)));
+    let first = ok_int(net::tcp_accept(listener));
+    handle(first, doc);
+    net::tcp_close(first);
+    let second = ok_int(net::tcp_accept(listener));
+    handle(second, doc);
+    net::tcp_close(second);
+    net::tcp_close(listener);
+}
+
+fn main() -> int {
+    match page() {
+        Result::Ok(doc) => serve(doc),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}
+"#,
+    );
+    let exe = dir.join(if cfg!(windows) {
+        "ui_server.exe"
+    } else {
+        "ui_server"
+    });
+    let build = run_bloom(&[
+        "build",
+        src.to_string_lossy().as_ref(),
+        "-o",
+        exe.to_string_lossy().as_ref(),
+    ]);
+    if no_toolchain(&build) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(build.code, 0, "{}", build.combined());
+
+    let mut child = Command::new(&exe)
+        .env("BLOOM_MEM_REPORT", "1")
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn ui server");
+    let mut reader = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+    let port = read_port(&mut reader);
+
+    let fetch = |target: &str| -> String {
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .expect("timeout");
+        let req = format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        stream.write_all(req.as_bytes()).expect("write request");
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes).expect("read response");
+        String::from_utf8_lossy(&bytes).to_string()
+    };
+
+    let page = fetch("/");
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    assert!(
+        page.contains("Content-Type: text/html; charset=utf-8"),
+        "{page}"
+    );
+    assert!(page.contains("Cache-Control: no-store"), "{page}");
+    assert!(page.contains("X-UI-Test: ja"), "{page}");
+    assert!(page.contains("<!doctype html>"), "{page}");
+    assert!(page.contains("data-theme=\"dark\""), "{page}");
+    assert!(page.contains("Hallo &lt;Server&gt; &amp; Co"), "{page}");
+    assert!(page.contains("data-variant=\"success\""), "{page}");
+
+    let css = fetch("/ui.css");
+    assert!(css.starts_with("HTTP/1.1 200"), "{css}");
+    assert!(
+        css.contains("Content-Type: text/css; charset=utf-8"),
+        "{css}"
+    );
+    assert!(
+        css.contains("Cache-Control: public, max-age=86400"),
+        "{css}"
+    );
+    assert!(css.contains(":root"), "{css}");
+    assert!(css.contains("[data-theme=\"dark\"]"), "{css}");
+    assert!(css.contains("prefers-color-scheme"), "{css}");
+    assert!(css.contains(".ui-btn"), "{css}");
+    let body = css.split("\r\n\r\n").nth(1).expect("css body");
+    assert!(body.len() > 10000, "css body too small: {}", body.len());
+
+    let status = child.wait().expect("wait");
+    let mut rest = String::new();
+    reader.read_to_string(&mut rest).expect("rest");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("stderr read");
+    assert_eq!(status.code(), Some(0), "{rest}\n{stderr}");
+    assert!(rest.contains("seite"), "{rest}");
+    assert!(rest.contains("css"), "{rest}");
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    assert!(stderr.contains("live sockets: 0"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn auth_password_natively() {
     let dir = temp_dir("auth-password");

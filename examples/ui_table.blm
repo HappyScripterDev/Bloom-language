@@ -1,0 +1,57 @@
+// Tabellen: Caption, Kopfzellen mit scope, Datenzellen und Leerzustand.
+use std::ui;
+
+fn tabelle() -> Result<ui::UiNode, string> {
+    let table = ui::table(ui::TableOptions {
+        caption: "Teammitglieder"
+    })?;
+    let head = ui::table_row(table, true)?;
+    ui::table_header_cell(head, "Name")?;
+    ui::table_header_cell(head, "Rolle")?;
+    ui::table_header_cell(head, "Status")?;
+    let row1 = ui::table_row(table, false)?;
+    ui::table_cell(row1, "Ada Lovelace")?;
+    ui::table_cell(row1, "Mathematik")?;
+    ui::table_cell(row1, "aktiv")?;
+    let row2 = ui::table_row(table, false)?;
+    ui::table_cell(row2, "Grace Hopper")?;
+    ui::table_cell(row2, "Compiler")?;
+    ui::table_cell(row2, "aktiv")?;
+    let row3 = ui::table_row(table, false)?;
+    ui::table_cell(row3, "Alan <Turing>")?;
+    ui::table_cell(row3, "Logik & Modelle")?;
+    ui::table_cell(row3, "archiviert")?;
+    return Result::Ok(table);
+}
+
+fn seite() -> Result<ui::UiNode, string> {
+    let doc = ui::document(ui::PageOptions {
+        title: "Bloom UI: Tabellen",
+        description: "Tabelle mit Kopfzeile und Leerzustand",
+        lang: "de",
+        theme: "light",
+        stylesheet_href: "/ui.css"
+    })?;
+    let body = ui::body(doc);
+    let wrap = ui::container("lg")?;
+    ui::append(body, wrap);
+    ui::append(wrap, ui::heading(1, "Tabelle")?);
+    ui::append(wrap, tabelle()?);
+    ui::append(wrap, ui::empty_state("Keine weiteren Eintraege", "Die Liste ist vollstaendig."));
+    return Result::Ok(doc);
+}
+
+fn ausgeben(doc: ui::UiNode) -> void {
+    match ui::render(doc) {
+        Result::Ok(html) => println(html),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+}
+
+fn main() -> int {
+    match seite() {
+        Result::Ok(doc) => ausgeben(doc),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}

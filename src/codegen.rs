@@ -107,6 +107,7 @@ fn c_type(ty: &Type) -> String {
         Type::Db => "bloom_db_handle".to_string(),
         Type::Stmt => "bloom_stmt_handle".to_string(),
         Type::Limiter => "bloom_auth_limiter_handle".to_string(),
+        Type::Ui => "bloom_ui_handle".to_string(),
         Type::Struct(name, args) => {
             format!("bloom_struct_{}", named_mangle(name, args))
         }
@@ -271,7 +272,8 @@ impl<'a> CEmitter<'a> {
             | Type::Session
             | Type::Db
             | Type::Stmt
-            | Type::Limiter => true,
+            | Type::Limiter
+            | Type::Ui => true,
             Type::Struct(name, args) => {
                 if let Some(info) = self.checked.structs.get(name) {
                     let bindings: HashMap<String, Type> = info
@@ -322,6 +324,7 @@ impl<'a> CEmitter<'a> {
             Type::Db => Some("bloom_db_retain".to_string()),
             Type::Stmt => Some("bloom_db_stmt_retain".to_string()),
             Type::Limiter => Some("bloom_auth_limiter_retain".to_string()),
+            Type::Ui => Some("bloom_ui_retain".to_string()),
             Type::Array(elem) => Some(format!("bloom_arr_{}_clone", arr_suffix(elem))),
             Type::Slice(elem) => Some(format!("bloom_slice_{}_clone", arr_suffix(elem))),
             Type::Struct(name, args) | Type::Enum(name, args) => {
@@ -349,6 +352,7 @@ impl<'a> CEmitter<'a> {
             Type::Db => Some("bloom_db_release".to_string()),
             Type::Stmt => Some("bloom_db_stmt_release".to_string()),
             Type::Limiter => Some("bloom_auth_limiter_release".to_string()),
+            Type::Ui => Some("bloom_ui_release".to_string()),
             Type::Array(elem) => Some(format!("bloom_arr_{}_drop", arr_suffix(elem))),
             Type::Slice(elem) => Some(format!("bloom_slice_{}_drop", arr_suffix(elem))),
             Type::Struct(name, args) | Type::Enum(name, args) => {
@@ -646,6 +650,10 @@ impl<'a> CEmitter<'a> {
             self.out.push_str(include_str!("../runtime/bloom_html.c"));
             self.out.push('\n');
         }
+        if loaded.contains("std::ui") {
+            self.out.push_str(include_str!("../runtime/bloom_ui.c"));
+            self.out.push('\n');
+        }
     }
 
     fn emit_globals(&mut self) {
@@ -716,6 +724,17 @@ impl<'a> CEmitter<'a> {
             self.out.push_str(
                 "bloom_fs_handle bloom_fs_bytes_retain(bloom_fs_handle h);\n\
                  void bloom_fs_bytes_release(bloom_fs_handle *h);\n\n",
+            );
+        }
+        if self
+            .checked
+            .functions
+            .iter()
+            .any(|sig| sig.module == "std::ui")
+        {
+            self.out.push_str(
+                "static bloom_ui_handle bloom_ui_retain(bloom_ui_handle h);\n\
+                 static void bloom_ui_release(bloom_ui_handle *h);\n\n",
             );
         }
         if self
@@ -1986,7 +2005,8 @@ impl<'a> CEmitter<'a> {
                     || info.base_c_name.starts_with("bloom_http_")
                     || info.base_c_name.starts_with("bloom_db_")
                     || info.base_c_name.starts_with("bloom_stmt_")
-                    || info.base_c_name.starts_with("bloom_auth_") =>
+                    || info.base_c_name.starts_with("bloom_auth_")
+                    || info.base_c_name.starts_with("bloom_ui_") =>
             {
                 self.emit_stdlib_call(&info.base_c_name, &info.params, args, id)
             }

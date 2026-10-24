@@ -78,6 +78,9 @@ typedef int64_t bloom_stmt_handle;
 /* Handle for a login rate limiter (std::auth, bloom_auth.c). */
 typedef int64_t bloom_auth_limiter_handle;
 
+/* Handle for a UI component tree (std::ui, bloom_ui.c). */
+typedef int64_t bloom_ui_handle;
+
 /*
  * Calling convention for `extern "system"` declarations. On 32-bit Windows
  * this is `__stdcall`; on x64 and other targets it is the default

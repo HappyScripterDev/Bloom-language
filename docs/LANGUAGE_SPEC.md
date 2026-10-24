@@ -1962,6 +1962,146 @@ pub struct Limiter { id }   // verwaltetes Handle
   CSRF-Prüfung. Passwort-Hashes und Sessiondaten dürfen nicht geloggt
   werden.
 
+### 13.16 Standardmodul `std::ui` (Komponenten und Themes)
+
+`std::ui` baut HTML-Seiten aus geprüften Bausteinen. Man übergibt keine
+Tag-Namen, Attribute oder rohes HTML, sondern nur Inhalte und Tokens aus
+festen Listen. Der Renderer maskiert Text und Attributwerte und schreibt
+kein JavaScript.
+
+```bloom
+use std::ui;
+
+let doc = ui::document(ui::PageOptions {
+    title: "Startseite",
+    description: "",
+    lang: "de",
+    theme: "system",
+    stylesheet_href: "/ui.css"
+})?;
+let body = ui::body(doc);
+let wrap = ui::container("md")?;
+ui::append(body, wrap);
+ui::append(wrap, ui::heading(1, "Willkommen")?);
+ui::append(wrap, ui::text("Alles wird maskiert: <b> kein HTML </b>"));
+ui::append(wrap, ui::alert("Gespeichert.", "success")?);
+match ui::render(doc) {
+    Result::Ok(html) => println(html),
+    Result::Err(e) => println("Fehler: " + e)
+};
+```
+
+| Funktion | Signatur |
+| --- | --- |
+| `document(options)` | `PageOptions -> Result<UiNode, string>` |
+| `body(document)` | `UiNode -> UiNode` |
+| `render(document)` | `UiNode -> Result<string, string>` |
+| `send_page(conn, status, document, headers)` | `int, int, UiNode, string -> Result<bool, string>` |
+| `stylesheet()` | `() -> string` |
+| `send_stylesheet(conn)` | `int -> Result<bool, string>` |
+| `container(width)` | `string -> Result<UiNode, string>` |
+| `stack(gap)` / `row(gap, wrap)` | `string`, `string, bool -> Result<UiNode, string>` |
+| `grid(columns, gap)` | `int, string -> Result<UiNode, string>` |
+| `section(title)` / `divider()` | `string -> UiNode`, `() -> UiNode` |
+| `heading(level, text)` | `int, string -> Result<UiNode, string>` |
+| `text(content)` / `muted_text(content)` | `string -> UiNode` |
+| `link(href, label)` | `string, string -> Result<UiNode, string>` |
+| `badge(label, variant)` | `string, string -> Result<UiNode, string>` |
+| `card(title)` | `string -> UiNode` |
+| `alert(message, variant)` | `string, string -> Result<UiNode, string>` |
+| `button(label, options)` | `string, ButtonOptions -> Result<UiNode, string>` |
+| `form(options)` | `FormOptions -> Result<UiNode, string>` |
+| `label(text, for_id)` | `string, string -> Result<UiNode, string>` |
+| `input(options)` | `InputOptions -> Result<UiNode, string>` |
+| `textarea(name, value, rows, id)` | `string, string, int, string -> Result<UiNode, string>` |
+| `select(name, id, multiple)` | `string, string, bool -> Result<UiNode, string>` |
+| `option(value, label)` | `string, string -> UiNode` |
+| `checkbox(name, value, id)` / `radio(name, value, id)` | `string, string, string -> Result<UiNode, string>` |
+| `field(control, id, label, help, error)` | `UiNode, string, string, string, string -> Result<UiNode, string>` |
+| `help_text(text)` / `form_error(text)` / `submit_button(label)` | `string -> UiNode` |
+| `nav(label)` / `breadcrumbs(label)` | `string -> UiNode` |
+| `nav_link(href, label, active)` | `string, string, bool -> Result<UiNode, string>` |
+| `breadcrumb(href, label)` | `string, string -> Result<UiNode, string>` |
+| `table(options)` | `TableOptions -> Result<UiNode, string>` |
+| `table_row(table, header)` | `UiNode, bool -> Result<UiNode, string>` |
+| `table_cell(row, text)` / `table_header_cell(row, text)` | `UiNode, string -> Result<UiNode, string>` |
+| `empty_state(title, text)` | `string, string -> UiNode` |
+| `avatar(src, alt, size)` | `string, string, string -> Result<UiNode, string>` |
+| `progress(value, max, label)` | `int, int, string -> Result<UiNode, string>` |
+| `skeleton(lines)` | `int -> Result<UiNode, string>` |
+| `pagination(current, total, base_href)` | `int, int, string -> Result<UiNode, string>` |
+| `append(parent, child)` | `UiNode, UiNode -> bool` |
+| `set_id(node, id)` / `placeholder(node, text)` / `set_value(node, value)` | `UiNode, string -> bool` |
+| `require` / `disable` / `readonly` / `check` / `select_option` | `UiNode -> bool` |
+| `set_aria_label(node, label)` | `UiNode, string -> bool` |
+| `set_class(node, tokens)` | `UiNode, string -> Result<bool, string>` |
+
+```bloom
+pub struct UiNode { id }
+pub struct ButtonOptions { variant: string, size: string, type_name: string, name: string, value: string, disabled: bool }
+pub struct InputOptions { type_name: string, name: string, value: string, id: string, placeholder: string, required: bool, disabled: bool }
+pub struct FormOptions { action: string, method: string }
+pub struct PageOptions { title: string, description: string, lang: string, theme: string, stylesheet_href: string }
+pub struct TableOptions { caption: string }
+```
+
+- **Kein rohes HTML:** `text`, `heading`, `alert`, `badge` und alle
+  anderen Funktionen nehmen nur Inhalte. Tag- und Attributnamen sind im
+  Laufzeitcode fest verdrahtet. `ui::render` maskiert Text und
+  Attributwerte mit demselben Escaper wie `std::html`
+  (`& < > " '`). Es gibt **keine** Funktion für ungefiltertes HTML.
+- **URLs:** `link`, `form.action`, `avatar.src` und `pagination.base_href`
+  erlauben nur `http(s)://…`, einen Pfad mit genau einem führenden `/`
+  (nicht `//`), einen relativen Pfad oder ein Fragment (`#…`). Andere
+  Schemata (`javascript:`, `data:`, `mailto:`), Steuerzeichen,
+  Leerzeichen und Backslashes werden abgelehnt.
+- **Validierte Tokens:** IDs (`a-z A-Z 0-9 _ -`, erster Buchstabe oder
+  Ziffer, 1..128), Feldnamen (1..128), Klassen (`a-z 0-9 _ - .`, getrennt
+  durch Leerzeichen, höchstens 512 Bytes). Größen, Varianten, Themen und
+  Methoden stammen aus festen Listen; unbekannte Werte liefern `Err`.
+- **Attributwerte:** höchstens 4096 Bytes, keine Steuerzeichen unter
+  0x20 und kein 0x7F. Texte dürfen bis 1 MiB groß sein; alle Ausgaben
+  zusammen höchstens 8 MiB, höchstens 20000 Knoten und Tiefe 64.
+- **Tabellen:** `table_row` hängt die Zeile selbst an `thead`/`tbody`,
+  `table_cell` und `table_header_cell` hängen die Zelle selbst an die
+  Zeile. Ein zusätzliches `append` würde sie doppelt einhängen.
+- **Checkboxen und Radios:** `checkbox`/`radio` liefern einen
+  Layout-Wrapper (`<span class="ui-check">`) um das eigentliche
+  `<input>`. `set_id`, `require`, `disable`, `set_value`, `check` und
+  `set_aria_label` wirken auf das innere Eingabefeld; `field` setzt ID
+  und ARIA-Attribute ebenfalls dort. `set_class` erweitert die Klassen
+  des übergebenen Knotens.
+- **Feld mit Hilfe/Fehler:** `field` setzt `for` am Label, ergänzt
+  `aria-describedby` (Hilfe und/oder Fehler) und bei einem nicht leeren
+  Fehlertext zusätzlich `aria-invalid="true"`. Hilfe- und Fehler-IDs
+  werden aus der Feld-ID gebildet (`<id>-help`, `<id>-error`).
+- **Dokument:** `document` erzeugt `<!doctype html>`, `<html>`, `<head>`
+  mit UTF-8, Viewport, maskiertem Titel, optionaler Beschreibung und
+  Stylesheet-Link sowie `<body class="ui-body">`. Leeres `theme` wird zu
+  `light`, leeres `stylesheet_href` zu `/ui.css`; leeres `lang` lässt das
+  Attribut weg. Erlaubte Themen: `light`, `dark`, `system`.
+- **Themes:** Das mitgelieferte Stylesheet (in `runtime/bloom_ui.css`,
+  beim Bauen als C-String eingebettet) arbeitet mit CSS-Variablen.
+  `data-theme="light"` und `data-theme="dark"` setzen sie direkt;
+  `data-theme="system"` folgt `prefers-color-scheme`. Ein Umschalter
+  braucht kein JavaScript. `prefers-reduced-motion` wird beachtet, das
+  Raster bricht bei 720 px auf eine Spalte um.
+- **Auslieferung:** `send_page` rendert und antwortet mit
+  `text/html; charset=utf-8`; eigene Header werden geprüft und
+  weitergereicht (`Content-Length`, `Connection` und
+  `Transfer-Encoding` bleiben gesperrt). `send_stylesheet` antwortet mit
+  `text/css; charset=utf-8` und `Cache-Control: public, max-age=86400`.
+  `ui::stylesheet()` liefert denselben Text als Bloom-String, z. B. für
+  `fs::write_text`.
+- **Fehler:** Alle falliblen Funktionen liefern
+  `Result<…, string>`; die Meldung beginnt mit der Operation
+  (`document: …`, `link: …`, `field: …`). Ein fehlgeschlagener Aufruf
+  verändert keinen bereits gebauten Baum.
+- **Integration:** `std::ui` ersetzt weder `std::auth` noch CSRF-Schutz.
+  Ein Login-Formular muss weiterhin ein CSRF-Token als verstecktes Feld
+  oder als eigener Wert enthalten; `std::ui` bietet dafür bewusst keinen
+  fertigen Helfer, damit nichts automatisch als „sicher“ gilt.
+
 ## 14. Fehlerdiagnostik
 
 Format:
@@ -2055,7 +2195,7 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
 | 5 | Datei-/E/A-Fehler |
 | 70 | Laufzeitfehler im Bloom-Programm |
 
-## 16. Ausdrücklich nicht unterstützt (Version 0.19.0)
+## 16. Ausdrücklich nicht unterstützt (Version 0.20.0)
 
 - Referenzempfänger (`&self`/`&mut self`), `var self` auf Enums
 - Klassen, Vererbung, Interfaces
@@ -2088,6 +2228,11 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
   Prozesses und sind keine Anmeldung)
 - **Datenbanken außer SQLite, ORMs, Schema-Migrationen,
   Connection-Pools, asynchrone Datenbankzugriffe, Savepoints**
+- **Clientseitige Interaktivität (JavaScript), eigene HTML-Tags oder
+  -Attribute, freies CSS pro Seite, Drag-and-drop, Grafiken/Charts und
+  automatische Formularvalidierung im Browser** (std::ui liefert
+  statisches, maskiertes HTML und ein festes Stylesheet; Verhalten im
+  Browser ist nicht Teil der Sprache)
 - **OAuth/OIDC, externe Login-Anbieter, E-Mail-Verifikation,
   Passwort-zurücksetzen per E-Mail, MFA/Passkeys, JWT als
   Session-Ersatz, verteilte Session-Stores, ABAC/Policy-Sprachen,

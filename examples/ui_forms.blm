@@ -1,0 +1,73 @@
+// Formulare mit std::ui: Label, Input, Textarea, Select, Checkbox,
+// Radio und Submit. Feld mit Hilfe- und Fehlertext inklusive ARIA.
+use std::ui;
+
+fn seite() -> Result<ui::UiNode, string> {
+    let doc = ui::document(ui::PageOptions {
+        title: "Bloom UI: Formulare",
+        description: "Formular-Bausteine",
+        lang: "de",
+        theme: "light",
+        stylesheet_href: "/ui.css"
+    })?;
+    let body = ui::body(doc);
+    let wrap = ui::container("sm")?;
+    ui::append(body, wrap);
+    ui::append(wrap, ui::heading(1, "Konto anlegen")?);
+    let form = ui::form(ui::FormOptions {
+        action: "/konto",
+        method: "post"
+    })?;
+    ui::append(form, ui::label("E-Mail-Adresse", "email")?);
+    let email = ui::input(ui::InputOptions {
+        type_name: "email",
+        name: "email",
+        value: "",
+        id: "email",
+        placeholder: "du@example.com",
+        required: true,
+        disabled: false
+    })?;
+    ui::append(form, email);
+
+    let notes = ui::textarea("notizen", "", 4, "notizen")?;
+    ui::append(form, ui::field(notes, "notizen", "Notizen", "Markdown wird unterstuetzt.", "")?);
+
+    let select = ui::select("plan", "plan", false)?;
+    ui::append(select, ui::option("free", "Free"));
+    ui::append(select, ui::option("team", "Team"));
+    ui::append(select, ui::option("business", "Business"));
+    ui::append(form, select);
+
+    let terms = ui::checkbox("agb", "ja", "agb")?;
+    ui::append(form, terms);
+    ui::append(form, ui::label("AGB akzeptieren", "agb")?);
+    ui::append(form, ui::radio("newsletter", "woche", "newsletter-woche")?);
+    ui::append(form, ui::label("Woechentlich", "newsletter-woche")?);
+    ui::append(form, ui::radio("newsletter", "monat", "newsletter-monat")?);
+    ui::append(form, ui::label("Monatlich", "newsletter-monat")?);
+    ui::append(form, ui::submit_button("Konto anlegen"));
+    ui::append(wrap, form);
+    return Result::Ok(doc);
+}
+
+fn ausgeben(doc: ui::UiNode) -> void {
+    match ui::render(doc) {
+        Result::Ok(html) => zeigen(html),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+}
+
+fn zeigen(html: string) -> void {
+    println(html);
+    println("");
+    println("Markup: " + str(len(html)) + " Zeichen");
+}
+
+fn main() -> int {
+    match seite() {
+        Result::Ok(doc) => ausgeben(doc),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}

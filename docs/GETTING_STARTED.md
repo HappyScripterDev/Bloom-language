@@ -882,6 +882,114 @@ Das Programm muss in dem Verzeichnis laufen, in dem die App ihre
 - `SameSite` und `HttpOnly` sind gesetzt, ersetzen aber keine
   CSRF-Prüfung; jeder verändernde Endpunkt ruft `csrf_check` selbst auf.
 
+## 16e. Web-Oberflächen mit `std::ui`
+
+`std::ui` baut HTML-Seiten aus festen Bausteinen. Es ist kein
+Browser-Framework: Es gibt kein JavaScript, keine freien Tags und kein
+rohes HTML. Für native Windows-Fenster ist `std::ui` nicht gedacht;
+dafür gibt es (ab 0.21) das separate Modul `std::desktop`.
+
+Ein vollständiges Beispiel liegt in `examples/ui_hello.blm`:
+
+```bloom
+use std::ui;
+
+fn seite() -> Result<ui::UiNode, string> {
+    let doc = ui::document(ui::PageOptions {
+        title: "Hallo",
+        description: "Minimales Beispiel",
+        lang: "de",
+        theme: "light",
+        stylesheet_href: "/assets/bloom-ui.css"
+    })?;
+    let body = ui::body(doc);
+    let wrap = ui::container("md")?;
+    ui::append(body, wrap);
+    ui::append(wrap, ui::heading(1, "Hallo <Welt> & Freunde")?);
+    ui::append(wrap, ui::text("<script>alert(1)</script> bleibt Text."));
+    return Result::Ok(doc);
+}
+
+fn main() -> int {
+    match seite() {
+        Result::Ok(doc) => ausgeben(doc),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}
+```
+
+```powershell
+cargo run --release -- run examples/ui_hello.blm
+```
+
+Die Ausgabe beginnt mit `<!doctype html>` und enthält maskierten Text:
+
+```html
+<h1 class="ui-heading" data-level="1">Hallo &lt;Welt&gt; &amp; Freunde</h1>
+<p class="ui-text">&lt;script&gt;alert(1)&lt;/script&gt; bleibt Text.</p>
+```
+
+Das Muster ist immer gleich: `document` erzeugt das Gerüst, `body`
+liefert den Body, `container`/`section`/`stack`/`row`/`grid` ordnen den
+Inhalt, die übrigen Funktionen liefern Inhalte. `ui::append` hängt einen
+Knoten an einen Elternknoten. `ui::render` erzeugt den fertigen String;
+`ui::send_page` schreibt ihn direkt an eine HTTP-Verbindung.
+
+### Themes
+
+Erlaubt sind `light`, `dark` und `system`. `system` folgt der
+Windows-Einstellung über `prefers-color-scheme`, ohne JavaScript. Das
+Stylesheet liegt in `runtime/bloom_ui.css` und wird beim Bauen
+eingebettet:
+
+```bloom
+let css = ui::stylesheet();
+fs::write_text("bloom-ui.css", css)?;
+```
+
+Oder direkt ausliefern (mit `Cache-Control: public, max-age=86400`):
+
+```bloom
+ui::send_stylesheet(conn)?;
+```
+
+Die Demo `examples/ui_themes.blm` schreibt alle drei Varianten als
+HTML-Dateien und räumt sie danach wieder auf.
+
+### Formulare
+
+```bloom
+let form = ui::form(ui::FormOptions { action: "/speichern", method: "post" })?;
+let mail = ui::input(ui::InputOptions {
+    type_name: "email",
+    name: "email",
+    value: "",
+    id: "email",
+    placeholder: "du@example.com",
+    required: true,
+    disabled: false
+})?;
+ui::append(form, ui::label("E-Mail", "email")?);
+ui::append(form, ui::field(mail, "email", "E-Mail", "Nur intern.", "")?);
+ui::append(form, ui::submit_button("Speichern"));
+```
+
+`field` setzt `for` am Label und `aria-describedby` für Hilfe und Fehler.
+Ein nicht leerer Fehlertext setzt zusätzlich `aria-invalid="true"`.
+Tabellenzeilen und -zellen hängen sich selbst an (`table_row`,
+`table_cell`, `table_header_cell`); ein zusätzliches `append` würde sie
+doppelt einhängen.
+
+### Grenzen
+
+- Texte und Attributwerte werden maskiert; URLs nur mit `http(s)`,
+  einem führenden `/`, relativ oder als Fragment.
+- Ausgabe höchstens 8 MiB, 20000 Knoten, Tiefe 64, Text pro Knoten 1 MiB.
+- `std::ui` prüft keine Berechtigungen und keinen CSRF-Token. Bei
+  Login-Formularen gehört der Token weiterhin in die Seite und wird
+  serverseitig mit `web::csrf_check` geprüft.
+
 ## 17. HTTPS
 
 ```bloom
