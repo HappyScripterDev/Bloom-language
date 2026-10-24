@@ -118,6 +118,8 @@ pub enum Type {
     Limiter,
     /// Internal handle to a UI component tree (`std::ui::UiNode`).
     Ui,
+    /// Internal handle to a native window (`std::desktop::Window`).
+    DesktopWindow,
 }
 
 impl Type {
@@ -192,6 +194,7 @@ pub fn mangle_type(ty: &Type) -> String {
         Type::Stmt => "stmt".to_string(),
         Type::Limiter => "auth_limiter".to_string(),
         Type::Ui => "ui".to_string(),
+        Type::DesktopWindow => "desktop_window".to_string(),
         Type::Param(name) => c_ident(name),
     }
 }
@@ -220,6 +223,7 @@ impl fmt::Display for Type {
             Type::Stmt => write!(f, "std::db::Statement"),
             Type::Limiter => write!(f, "std::auth::Limiter"),
             Type::Ui => write!(f, "std::ui::UiNode"),
+            Type::DesktopWindow => write!(f, "std::desktop::Window"),
             Type::Struct(name, args) => {
                 if args.is_empty() {
                     write!(f, "{}", name)

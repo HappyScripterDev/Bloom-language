@@ -12,9 +12,9 @@ schreiben kann: Dateien lesen, im Netzwerk reden, JSON verarbeiten,
 HTML-Seiten ausliefern. Alles davon ist schon eingebaut und braucht
 keine externen Bibliotheken.
 
-Stand: **0.20.0**. Getestet wird auf Windows (MSVC). Linux und macOS
+Stand: **0.21.0**. Getestet wird auf Windows (MSVC). Linux und macOS
 sind im Code vorgesehen, aber ich entwickle und teste fast nur auf
-Windows.
+Windows. `std::desktop` ist ausschließlich unter Windows verfügbar.
 
 ```bloom
 struct Pair<A, B> {
@@ -104,35 +104,34 @@ Wenn Bloom keinen C-Compiler findet, sagt es dir, was fehlt. Welchen
 es nimmt, kann man mit `BLOOM_CC` erzwingen (`set BLOOM_CC=clang`).
 Mehr dazu steht in [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
-## Was in 0.20 dazugekommen ist
+## Was in 0.21 dazugekommen ist
 
-- `std.ui`: HTML-Seiten aus geprüften Bausteinen. Dokument, Layout
-  (Container, Stack, Row, Grid, Section), Text, Karten, Alerts, Badges,
-  Buttons, Formulare, Tabellen, Navigation, Breadcrumbs, Avatar,
-  Fortschritt, Skeleton, Pagination und Leerzustände.
-- Kein rohes HTML: Texte und Attributwerte werden mit dem vorhandenen
-  Escaper maskiert. URLs laufen durch eine Allowlist (`http(s)`, ein
-  führender `/`, relative Pfade, Fragmente); IDs, Feldnamen, Klassen,
-  Größen und Varianten werden validiert. Limits: 8 MiB Ausgabe,
-  20000 Knoten, Tiefe 64, 1 MiB Text pro Knoten.
-- Themes ohne JavaScript: `light`, `dark` und `system` über
-  `data-theme` und `prefers-color-scheme`. Das Stylesheet
-  (`runtime/bloom_ui.css`, rund 14 KB) wird beim Bauen eingebettet und
-  ist als `ui::stylesheet()` oder direkt über `ui::send_stylesheet`
-  verfügbar (eigener Cache-Header).
-- Formulare und Barrierefreiheit: Labels mit `for`, `aria-describedby`
-  für Hilfe/Fehler, `aria-invalid`, `aria-current`, `scope="col"`,
-  Fortschritt mit `aria-label`. Checkbox-/Radio-Mutatorfunktionen wirken
-  auf das innere Eingabefeld.
-- Integration: `ui::send_page` liefert direkt an eine HTTP-Verbindung
-  aus; Seiten lassen sich mit `std::auth`, `std::db` und `std::web`
-  kombinieren. `std::ui` ersetzt keinen CSRF-Schutz.
-- Behoben: doppelte Tabellenzellen durch versehentliches zweites
-  Anhängen, ein Leck beim Description-Meta, hängende Stack-Tags bei
-  Überschriften und geleakte Varianten-/Pagination-Strings.
-- Beispiele: `ui_hello`, `ui_layouts`, `ui_components`, `ui_forms`,
-  `ui_themes`, `ui_table`, `ui_dashboard`, `ui_login_page`,
-  `ui_gallery`.
+- `std.desktop`: echte native Windows-Fenster und -Steuerelemente. Fenster
+  mit Titel und Größe, Labels, Buttons, einzeilige Texteingaben, Checkboxen,
+  Sichtbarkeit, Aktivierung, Fokus, Position und Größe.
+- Ereignisse ohne Callback-Zwang: `next_event` blockiert ohne Busy-Wait
+  und liefert `click`, `check`, `input` und `close` mit Control-ID und
+  aktuellen Werten. Ein privater Weckmechanismus verhindert verlorene
+  Ereignisse nach Cross-Thread-`SendMessage`; die Warteschlange ist pro
+  Fenster begrenzt.
+- Fenster und Ressourcen: `Window` ist ein verwalteter Handle mit
+  Referenzzählung. Schließen ist idempotent, Controls werden nach dem
+  Schließen abgelehnt, der letzte Handle zerstört das native Fenster.
+  Bis zu 64 Fenster und 512 Controls pro Fenster.
+- Unicode: alle Texte laufen über UTF-8 ↔ UTF-16 mit Validierung
+  (Umlaute, Emoji, Japanisch getestet). Steuerzeichen und NUL-Bytes in
+  Texten werden abgelehnt.
+- DPI: Per-Monitor-v2-Awareness beim ersten Fenster (mit Fallback),
+  öffentliche Koordinaten und Größen in logischen 96-DPI-Einheiten;
+  `WM_DPICHANGED` passt die Fenstergröße an. Controls werden nicht
+  automatisch umskaliert.
+- Windows-Build: Programme mit `std::desktop` linken standardmäßig als
+  GUI-Anwendung (`/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup`, kein
+  Konsolenfenster). `bloom build ... --console` erzwingt die Konsole,
+  z. B. für Tests. Normale Programme bleiben unverändert.
+- Beispiele: `desktop_hello`, `desktop_button`, `desktop_input`,
+  `desktop_checkbox`, `desktop_counter`, `desktop_layout`,
+  `desktop_unicode`, `desktop_errors`.
 
 ## Was (noch) nicht geht
 
@@ -144,6 +143,14 @@ Damit hier keine falschen Erwartungen entstehen:
 - Kein HTTP/2, keine WebSockets, kein UDP.
 - TLS gibt es nur als Client unter Windows; einen HTTPS-Server gibt es
   nicht (TLS-Terminierung davor).
+- `std::desktop` gibt es nur unter Windows; andere Systeme liefern einen
+  klaren Fehler. MacOS/Linux-GUIs sind weder implementiert noch getestet.
+- Keine Menüs, Toolbars, Tabellen-/Tree-Controls, Drag-and-drop,
+  eigenen Zeichenflächen, Direct3D, Themes oder Designer.
+- Keine Threads: Fenster und Controls gehören dem Thread, der sie
+  erzeugt hat; alle Desktop-Aufrufe müssen dort laufen.
+- Keine automatische Layout-Engine und keine automatische
+  Control-Skalierung bei DPI-Wechseln oder Fenstergrößenänderung.
 - Kein OAuth/OIDC, keine MFA, keine E-Mail-Verifikation, kein
   Passwort-Reset per E-Mail, kein JWT.
 - Die Sprache ist 0.x. Ich ändere APIs auch mal, wenn es sein muss.
@@ -164,7 +171,7 @@ Damit hier keine falschen Erwartungen entstehen:
 ## Selbst entwickeln
 
 ```bash
-cargo test                    # 523 Tests: Unit + echte kompilierte Programme
+cargo test                    # 529 Tests: Unit + echte kompilierte Programme
 cargo clippy --all-targets
 cargo fmt
 ```
@@ -186,6 +193,7 @@ bloom run examples/db_prepared.blm
 bloom run examples/auth_password.blm
 bloom run examples/web_csrf_form.blm
 bloom run examples/ui_hello.blm
+bloom run examples/desktop_hello.blm
 ```
 
 ## Lizenz

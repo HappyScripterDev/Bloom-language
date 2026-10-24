@@ -1,0 +1,86 @@
+// Layout: Positionen und Groessen in logischen Einheiten (96 DPI).
+// Der Button verschiebt ein Label und zeigt die neuen Grenzen an.
+use std::desktop;
+
+var position: int = 0;
+
+fn fail(e: string) -> bool {
+    println("FEHLER: " + e);
+    return false;
+}
+
+fn zeigen(win: desktop::Window, status: int, box: int) -> void {
+    match desktop::control_bounds(win, box) {
+        Result::Ok(b) => set_text(win, status, "Box: " + str(b.x) + "," + str(b.y) + " - " + str(b.width) + "x" + str(b.height)),
+        Result::Err(e) => println("Grenzen: " + e)
+    };
+}
+
+fn set_text(win: desktop::Window, label: int, text: string) -> void {
+    match desktop::control_set_text(win, label, text) {
+        Result::Ok(_) => println(text),
+        Result::Err(e) => println("Label: " + e)
+    };
+}
+
+fn on_event(win: desktop::Window, ev: desktop::Event, status: int, box: int, move_btn: int) -> bool {
+    if ev.kind == "click" {
+        if ev.control == move_btn {
+            position = position + 1;
+            if position > 2 {
+                position = 0;
+            }
+            if position == 0 {
+                set_box(win, status, box, 24, 120, 200, 32);
+            } else if position == 1 {
+                set_box(win, status, box, 260, 120, 200, 32);
+            } else {
+                set_box(win, status, box, 24, 200, 436, 32);
+            }
+        }
+    } else if ev.kind == "close" {
+        println("Fenster geschlossen");
+    }
+    return true;
+}
+
+fn set_box(win: desktop::Window, status: int, box: int, x: int, y: int, width: int, height: int) -> void {
+    match desktop::control_set_bounds(win, box, x, y, width, height) {
+        Result::Ok(_) => zeigen(win, status, box),
+        Result::Err(e) => println("Position: " + e)
+    };
+}
+
+fn step(win: desktop::Window, status: int, box: int, move_btn: int) -> bool {
+    return match desktop::next_event(win) {
+        Result::Ok(ev) => on_event(win, ev, status, box, move_btn),
+        Result::Err(e) => fail(e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let win = desktop::window_create("Bloom Desktop: Layout", 640, 360)?;
+    desktop::label_create(win, "Logische Koordinaten, 96 DPI", 24, 20, 560, 24)?;
+    let box = desktop::label_create(win, "Bewegliche Box", 24, 120, 200, 32)?;
+    let position = desktop::button_create(win, "Position wechseln", 24, 60, 180, 34)?;
+    let status = desktop::label_create(win, "", 24, 300, 580, 24)?;
+    desktop::window_show(win)?;
+    while step(win, status, box, position) {
+        if ! desktop::window_alive(win) {
+            break;
+        }
+    }
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

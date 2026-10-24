@@ -27,6 +27,7 @@ KOMMANDOS:
 OPTIONEN FUER build:
     -o <pfad>            Ausgabedatei (Standard: neben dem Quellcode oder build/<name>.exe)
     --emit-c <pfad>      Den generierten C-Code zusaetzlich an dieser Stelle speichern
+    --console            Konsolen-Subsystem erzwingen (auch fuer std::desktop)
 
 WEITERE OPTIONEN:
     -h, --help           Diese Hilfe anzeigen
@@ -148,6 +149,7 @@ fn cmd_build(args: &[String]) -> i32 {
     let mut output: Option<String> = None;
     let mut emit_c: Option<String> = None;
     let mut link_values: Vec<String> = Vec::new();
+    let mut force_console = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -171,6 +173,10 @@ fn cmd_build(args: &[String]) -> i32 {
                 }
                 link_values.push(args[i + 1].clone());
                 i += 2;
+            }
+            "--console" => {
+                force_console = true;
+                i += 1;
             }
             "-h" | "--help" => {
                 print_help();
@@ -203,7 +209,7 @@ fn cmd_build(args: &[String]) -> i32 {
     }
     let out = output.map(PathBuf::from).unwrap_or(default_out);
     let emit_c_path = emit_c.map(PathBuf::from);
-    match compiler::build(&src, &out, emit_c_path.as_deref(), &links) {
+    match compiler::build(&src, &out, emit_c_path.as_deref(), &links, force_console) {
         Ok(()) => {
             if let Some(p) = &emit_c_path {
                 println!("C-Code geschrieben: {}", p.display());
@@ -221,6 +227,7 @@ fn cmd_build(args: &[String]) -> i32 {
 fn cmd_run(args: &[String]) -> i32 {
     let mut link_values: Vec<String> = Vec::new();
     let mut file: Option<String> = None;
+    let mut force_console = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -230,6 +237,10 @@ fn cmd_run(args: &[String]) -> i32 {
                 }
                 link_values.push(args[i + 1].clone());
                 i += 2;
+            }
+            "--console" => {
+                force_console = true;
+                i += 1;
             }
             "-h" | "--help" => {
                 print_help();
@@ -260,7 +271,7 @@ fn cmd_run(args: &[String]) -> i32 {
             }
         }
     }
-    match compiler::run(&src, &links) {
+    match compiler::run(&src, &links, force_console) {
         Ok(code) => code,
         Err(e) => {
             e.report();

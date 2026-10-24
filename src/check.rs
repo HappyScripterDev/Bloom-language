@@ -1188,6 +1188,9 @@ impl Checker {
                 Some(crate::modules::BuiltinModule::Ui) => {
                     self.register_ui_functions(&m.name);
                 }
+                Some(crate::modules::BuiltinModule::Desktop) => {
+                    self.register_desktop_functions(&m.name);
+                }
                 Some(crate::modules::BuiltinModule::Win32) => {
                     if cfg!(windows) {
                         self.register_win32_functions(&m.name);
@@ -2872,6 +2875,263 @@ impl Checker {
                 "bloom_ui_send_stylesheet",
                 vec![Type::Int],
                 str_err(Type::Bool),
+            ),
+        ];
+        for (name, c_name, params, ret) in defs {
+            self.register_builtin_fn(module, name, c_name, params, ret);
+        }
+    }
+    fn register_desktop_functions(&mut self, module: &str) {
+        let span = Span::point(1, 1);
+        let struct_defs: Vec<(&str, Vec<(&str, Type)>)> = vec![
+            ("Window", vec![("id", Type::DesktopWindow)]),
+            (
+                "Event",
+                vec![
+                    ("kind", Type::String),
+                    ("control", Type::Int),
+                    ("text", Type::String),
+                    ("checked", Type::Bool),
+                ],
+            ),
+            (
+                "Bounds",
+                vec![
+                    ("x", Type::Int),
+                    ("y", Type::Int),
+                    ("width", Type::Int),
+                    ("height", Type::Int),
+                ],
+            ),
+            ("Size", vec![("width", Type::Int), ("height", Type::Int)]),
+        ];
+        for (name, fields) in struct_defs {
+            let canonical = format!("{}::{}", module, name);
+            let fields = fields
+                .into_iter()
+                .map(|(n, ty)| StructField {
+                    name: n.to_string(),
+                    ty,
+                })
+                .collect();
+            self.structs.entry(canonical).or_insert_with(|| StructInfo {
+                params: Vec::new(),
+                fields,
+                span,
+                module: module.to_string(),
+                is_pub: true,
+            });
+        }
+        let window_ty = Type::Struct(format!("{}::Window", module), Vec::new());
+        let event_ty = Type::Struct(format!("{}::Event", module), Vec::new());
+        let bounds_ty = Type::Struct(format!("{}::Bounds", module), Vec::new());
+        let size_ty = Type::Struct(format!("{}::Size", module), Vec::new());
+        let result = |ok: Type| Type::Enum("Result".to_string(), vec![ok, Type::String]);
+        let window_err = result(window_ty.clone());
+        let bool_err = result(Type::Bool);
+        let int_err = result(Type::Int);
+        let str_err = result(Type::String);
+        let event_err = result(event_ty);
+        let bounds_err = result(bounds_ty);
+        let size_err = result(size_ty);
+        let defs: Vec<(&str, &str, Vec<Type>, Type)> = vec![
+            ("available", "bloom_desktop_available", vec![], Type::Bool),
+            (
+                "window_create",
+                "bloom_desktop_window_create",
+                vec![Type::String, Type::Int, Type::Int],
+                window_err,
+            ),
+            (
+                "window_show",
+                "bloom_desktop_window_show",
+                vec![window_ty.clone()],
+                bool_err.clone(),
+            ),
+            (
+                "window_hide",
+                "bloom_desktop_window_hide",
+                vec![window_ty.clone()],
+                bool_err.clone(),
+            ),
+            (
+                "window_set_title",
+                "bloom_desktop_window_set_title",
+                vec![window_ty.clone(), Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "window_set_size",
+                "bloom_desktop_window_set_size",
+                vec![window_ty.clone(), Type::Int, Type::Int],
+                bool_err.clone(),
+            ),
+            (
+                "window_set_position",
+                "bloom_desktop_window_set_position",
+                vec![window_ty.clone(), Type::Int, Type::Int],
+                bool_err.clone(),
+            ),
+            (
+                "window_close",
+                "bloom_desktop_window_close",
+                vec![window_ty.clone()],
+                bool_err.clone(),
+            ),
+            (
+                "window_alive",
+                "bloom_desktop_window_alive",
+                vec![window_ty.clone()],
+                Type::Bool,
+            ),
+            (
+                "window_dpi",
+                "bloom_desktop_window_dpi",
+                vec![window_ty.clone()],
+                int_err.clone(),
+            ),
+            (
+                "window_client_size",
+                "bloom_desktop_window_client_size",
+                vec![window_ty.clone()],
+                size_err,
+            ),
+            (
+                "message_box",
+                "bloom_desktop_message_box",
+                vec![Type::String, Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "label_create",
+                "bloom_desktop_label_create",
+                vec![
+                    window_ty.clone(),
+                    Type::String,
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                ],
+                int_err.clone(),
+            ),
+            (
+                "button_create",
+                "bloom_desktop_button_create",
+                vec![
+                    window_ty.clone(),
+                    Type::String,
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                ],
+                int_err.clone(),
+            ),
+            (
+                "text_input_create",
+                "bloom_desktop_text_input_create",
+                vec![
+                    window_ty.clone(),
+                    Type::String,
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                ],
+                int_err.clone(),
+            ),
+            (
+                "checkbox_create",
+                "bloom_desktop_checkbox_create",
+                vec![
+                    window_ty.clone(),
+                    Type::String,
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                ],
+                int_err.clone(),
+            ),
+            (
+                "control_text",
+                "bloom_desktop_control_text",
+                vec![window_ty.clone(), Type::Int],
+                str_err,
+            ),
+            (
+                "control_set_text",
+                "bloom_desktop_control_set_text",
+                vec![window_ty.clone(), Type::Int, Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "control_checked",
+                "bloom_desktop_control_checked",
+                vec![window_ty.clone(), Type::Int],
+                bool_err.clone(),
+            ),
+            (
+                "control_set_checked",
+                "bloom_desktop_control_set_checked",
+                vec![window_ty.clone(), Type::Int, Type::Bool],
+                bool_err.clone(),
+            ),
+            (
+                "control_enabled",
+                "bloom_desktop_control_enabled",
+                vec![window_ty.clone(), Type::Int],
+                bool_err.clone(),
+            ),
+            (
+                "control_set_enabled",
+                "bloom_desktop_control_set_enabled",
+                vec![window_ty.clone(), Type::Int, Type::Bool],
+                bool_err.clone(),
+            ),
+            (
+                "control_visible",
+                "bloom_desktop_control_visible",
+                vec![window_ty.clone(), Type::Int],
+                bool_err.clone(),
+            ),
+            (
+                "control_set_visible",
+                "bloom_desktop_control_set_visible",
+                vec![window_ty.clone(), Type::Int, Type::Bool],
+                bool_err.clone(),
+            ),
+            (
+                "control_bounds",
+                "bloom_desktop_control_bounds",
+                vec![window_ty.clone(), Type::Int],
+                bounds_err,
+            ),
+            (
+                "control_set_bounds",
+                "bloom_desktop_control_set_bounds",
+                vec![
+                    window_ty.clone(),
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                ],
+                bool_err.clone(),
+            ),
+            (
+                "control_focus",
+                "bloom_desktop_control_focus",
+                vec![window_ty.clone(), Type::Int],
+                bool_err,
+            ),
+            (
+                "next_event",
+                "bloom_desktop_next_event",
+                vec![window_ty.clone()],
+                event_err,
             ),
         ];
         for (name, c_name, params, ret) in defs {

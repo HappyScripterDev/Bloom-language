@@ -51,6 +51,7 @@ manchmal durchscheinen, aber damit kann ich leben.
 | `runtime/bloom_html.c` | `std::html`-Implementierung (HTML-Escaping, iterativer Template-Parser und -Renderer) |
 | `runtime/bloom_ui.c` | `std::ui`-Implementierung (Komponentenbaum, Validierung, Renderer); CSS als eingebetteter C-String |
 | `runtime/bloom_ui.css` | Stylesheet-Quelle für `std::ui` (Design-Tokens, Light/Dark/System, Komponenten) |
+| `runtime/bloom_desktop.c` | `std::desktop`-Implementierung (Win32-Fenster, Controls, Ereignisschleife, DPI/UTF-16) |
 | `runtime/bloom_json.c` | `std::json`-Implementierung (RFC-8259-Parser, refcountetes Wertmodell, Serializer) |
 | `tests/e2e.rs` | Integrationstests über die echte CLI |
 
@@ -58,7 +59,8 @@ manchmal durchscheinen, aber damit kann ich leben.
 
 `std::math`, `std::fs`, `std::process`, `std::time`, `std::win32`,
 `std::net`, `std::tls`, `std::http`, `std::path`, `std::json`,
-`std::web`, `std::html`, `std::db`, `std::auth` und `std::ui` haben **keine
+`std::web`, `std::html`, `std::db`, `std::auth`, `std::ui` und
+`std::desktop` haben **keine
 Quelldatei**. Der Modul-Loader erkennt die Pfade (`builtin_module`) und legt
 ein leeres Modul mit `BuiltinModule`-Marker an. Der Checker registriert
 dafür:
@@ -77,7 +79,9 @@ vom internen Typ `Type::Web`) sowie `std::web::Match` (Felder `status`,
 `std::db::Statement` (`Type::Db`/`Type::Stmt`), `std::auth::Limiter`
 (`Type::Limiter`) sowie `std::ui::UiNode` (`Type::Ui`, Feld `id`) und die
 Options-Structs `std::ui::ButtonOptions`, `InputOptions`, `FormOptions`,
-`PageOptions` und `TableOptions`.
+`PageOptions` und `TableOptions`; außerdem `std::desktop::Window`
+(`Type::DesktopWindow`, Feld `id`), `Event` (`kind`, `control`, `text`,
+`checked`), `Bounds` und `Size`.
 
 Codegen überspringt Prototypen für `std::*`-Funktionen, emittiert die
 C-Implementierung nur für tatsächlich geladene Module (nach den
@@ -258,6 +262,52 @@ liefern einen Layout-Wrapper mit einem geliehenen Zeiger auf das innere
 `field` setzt `for`, `aria-describedby` und `aria-invalid` dort.
 Tabellenzeilen und -zellen hängen sich beim Erzeugen selbst an
 (`table_row` an `thead`/`tbody`, Zellen an `tr`).
+
+## Native Fenster (`std::desktop`)
+
+`bloom_desktop.c` kapselt Win32. Ein `bloom_desktop_window` ist ein
+refcountetes Handle (`Type::DesktopWindow`) mit HWND, Thread-ID,
+Control-Registry (max. 512), DPI und einer Ereignis-Warteschlange
+(64 Plätze, Ringpuffer; volle Warteschlangen verwerfen das älteste
+Ereignis). Native HWNDs verlassen die Runtime nicht; Controls sind
+pro Fenster vergebene Integer-IDs ab 100 und werden über eine
+Registry mit `IsWindow` geprüft. Die Runtime registriert eine eigene
+Fensterklasse und prüft bei jedem Aufruf Magic, Live-Registry und
+GUI-Thread. Schließen (`WM_CLOSE` oder `window_close`) ist idempotent,
+erzeugt genau ein `"close"`-Ereignis, zerstört das Fenster sofort und
+macht alle Control-IDs ungültig. Der letzte Handle zerstört das
+Fenster ebenfalls.
+
+`next_event` pumpt mit `GetMessageW` (kein Busy-Wait) und
+`DispatchMessageW`, verarbeitet aber nur die Nachrichten der eigenen
+Thread-Queue. `WM_COMMAND` wird zu `click`/`check`/`input`,
+`EN_CHANGE` liest den aktuellen Text; programmatisches
+`control_set_text` unterdrückt das sonst ausgelöste `input`-Ereignis.
+Nach dem Einreihen eines Ereignisses postet die Runtime eine private
+Wecknachricht (`WM_APP+1`), damit ein per `SendMessage` von außen
+ausgelöster Klick die blockierende Schleife aufweckt. Es gibt genau
+eine Zustellung pro Ereignis; `WM_QUIT` wird nicht selbst erzeugt,
+damit ein späteres Fenster nicht sofort beendet wird.
+
+Texte laufen über `MultiByteToWideChar`/`WideCharToMultiByte`
+(UTF-8, `MB_ERR_INVALID_CHARS`), mit 1-MiB-Limit, Ablehnung von
+Steuerzeichen/NUL-Bytes und Größenprüfung. Koordinaten sind logische
+96-DPI-Einheiten; `GetDpiForWindow`/`AdjustWindowRectExForDpi` werden
+dynamisch geladen (Fallback System-DPI/`AdjustWindowRectEx`).
+`SetProcessDpiAwarenessContext` (Per-Monitor v2) wird vor dem ersten
+Fenster gesetzt, mit Fallbacks. `WM_DPICHANGED` übernimmt den
+vorgeschlagenen Rahmen; Controls werden nicht automatisch skaliert.
+Unter Nicht-Windows enthält die Datei Stubs, die `available() = false`
+liefern und sonst `Err` zurückgeben; es werden keine Win32-Bibliotheken
+gelinkt.
+
+`auto_links` ergänzt unter Windows `user32` und `gdi32`. Erkennt
+`prepare` `std::desktop`, setzt `Prepared.uses_desktop`; der
+MSVC-Linkaufruf erhält dann `/link /SUBSYSTEM:WINDOWS
+/ENTRY:mainCRTStartup` (CRT und `main` bleiben erhalten, aber ohne
+Konsolenfenster). `--console` erzwingt das Konsolen-Subsystem;
+`--emit-c` schreibt die komplette Runtime mit. Andere Toolchains
+erhalten bei GUI-Builds `-mwindows` (GCC/Clang), tcc bleibt Konserve.
 
 ## Dateien (`std::fs::Bytes`, statische Inhalte)
 
@@ -745,7 +795,11 @@ nativer Kopfsemantik dargestellt.
   Eingaben, 405/404) und die Beispiele; `std::ui` über Escaping-,
   URL-/ID-/Token-, Komponenten-, Theme-/Stylesheet-, Limit- und
   HTTP-Auslieferungstests (eigene Seite und CSS mit Cache-Header) sowie
-  die neun Beispiele. Fehlt
+  die neun Beispiele. `std::desktop` wird über echte Fenster und
+  Controls getestet: Ereignisse (`click`, `check`, `input`, `close`),
+  Cross-Prozess-`WM_SETTEXT` mit Unicode, mehrere Fenster, DPI-/
+  Größenumrechnung, Fehler-/Lebensdauerpfade, alle acht Beispiele,
+  PE-Subsystem (`WINDOWS` vs. `CONSOLE`) und `--emit-c`. Fehlt
   ein C-Compiler, überspringen sich die betroffenen Tests mit Hinweis.
 
 ## Bewusste Entwurfsentscheidungen
@@ -767,4 +821,5 @@ nativer Kopfsemantik dargestellt.
 | Rekursive Structs/Enums werden abgelehnt | Werte sind inline; Rekursion braucht Referenzen (geplant mit dem Speichermodell) |
 | Kein Freigeben von Heap-Speicher (0.6) | bewusste Einschränkung; Analyse und Migrationspfad in `docs/MEMORY_MODEL.md` |
 | Eingebettete Laufzeit statt externer Bibliothek | erzeugte Programme sind eigenständig, kein Bloom-Installationspfad nötig |
+| GUI-Subsystem nur bei `std::desktop` | Desktopprogramme öffnen kein unnötiges Konsolenfenster; `--console` bleibt als bewusster Testschalter |
 | Keine externen Rust-Crates | einfache Builds, keine Supply-Chain-Abhängigkeiten |

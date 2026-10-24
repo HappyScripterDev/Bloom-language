@@ -604,13 +604,57 @@ Vertagt (weiterhin geplant):
 
 Vertagt (weiterhin geplant):
 
-- Native Windows-Desktopfenster und -Controls (eigenes Modul)
+- Native Windows-Desktopfenster und -Controls (in 0.21 umgesetzt)
 - Clientseitige Interaktivität (JavaScript), freies CSS/HTML,
   Formularvalidierung im Browser
 - Weitere Komponenten: Menüs, Tabs, Modals, Charts, Tooltips
 - Streaming/Range-Requests, ETag/Last-Modified, automatisches Neuladen
 - Template-Includes, Makros, ausführbare Ausdrücke, Raw-HTML
 - WebSocket, JSON-Streaming
+
+## Version 0.21.0 – Native Windows-Desktopanwendungen (implementiert)
+
+- **`std.desktop`:** echte Win32-Fenster (max. 64) mit Titel, Größe,
+  Position, Sichtbarkeit und DPI-Abfrage; verwaltete `Window`-Handles
+  mit Referenzzählung und idempotentem Schließen.
+- **Controls:** Labels, Buttons, einzeilige Texteingaben und Checkboxen
+  (max. 512 pro Fenster), Texte lesen/schreiben, Checkbox-Zustand,
+  Enabled/Visible, Bounds und Fokus. IDs pro Fenster ab 100, nach dem
+  Schließen ungültig.
+- **Ereignisse:** `next_event` blockiert ohne Busy-Wait und liefert
+  `click`, `check`, `input` und `close` mit Control-ID, Text und
+  Checkbox-Zustand. Private Wecknachricht gegen verlorene
+  Cross-Thread-Ereignisse, Warteschlange mit 64 Plätzen pro Fenster.
+  Programmgesteuertes `control_set_text` erzeugt kein `input`.
+- **Unicode:** UTF-8 ↔ UTF-16 mit Validierung und 1-MiB-Limit; Umlaute,
+  Japanisch und Emoji getestet. Steuerzeichen/NUL-Bytes werden
+  abgelehnt.
+- **DPI:** Per-Monitor-v2-Awareness mit Fallbacks, logische
+  96-DPI-Koordinaten und -Größen, dynamische `GetDpiForWindow`/
+  `AdjustWindowRectExForDpi`-Nutzung, `WM_DPICHANGED`-Rahmenübernahme.
+  Controls werden nicht automatisch umskaliert.
+- **Build:** GUI-Subsystem automatisch bei `std::desktop`
+  (`/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup`), `--console` erzwingt
+  die Konsole; automatische Links gegen `user32`/`gdi32`; `--emit-c`
+  enthält die Win32-Runtime. Nicht-Windows erhält Stubs mit klaren
+  Fehlern.
+- **Beispiele:** `desktop_hello`, `desktop_button`, `desktop_input`,
+  `desktop_checkbox`, `desktop_counter`, `desktop_layout`,
+  `desktop_unicode`, `desktop_errors`
+- 529 Tests (323 Unit + 206 E2E), darunter echte Fenster-Ereignisse
+  über `WM_SETTEXT`/`BM_CLICK`/`WM_CLOSE`, mehrere Fenster,
+  Unicode-Roundtrip, DPI-/Größenprüfung, Fehler-/Lebensdauerpfade,
+  PE-Subsystemprüfung, `--emit-c` und alle acht Beispiele mit
+  `live allocations: 0`
+
+Vertagt (weiterhin geplant):
+
+- Menüs, Toolbars, Tabellen-/Tree-Controls, Dialoge außer `message_box`
+- Automatische Layouts, Control-Skalierung bei DPI-/Größenwechsel
+- Eigenes Rendering, Direct3D, Themes, GUI-Designer
+- Threads/Executor und Thread-sichere Fenster
+- Linux-/macOS-GUI-Backends (ungetestet, nicht implementiert)
+- Weitere Webfunktionen (Streaming/Range, WebSocket) und Ökosystem
 
 ## Version 1.0.0+ – Ökosystem (geplant)
 

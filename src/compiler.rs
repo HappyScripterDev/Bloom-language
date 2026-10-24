@@ -241,6 +241,7 @@ struct Prepared {
     extra_sources: Vec<String>,
     defines: Vec<String>,
     include_dirs: Vec<String>,
+    uses_desktop: bool,
 }
 
 /// Link inputs implied by loaded standard library modules.
@@ -253,6 +254,8 @@ fn auto_links(checked: &CheckedProgram) -> Vec<toolchain::LinkItem> {
             "std::tls" => &["ws2_32", "secur32", "crypt32"],
             "std::web" if cfg!(windows) => &["bcrypt"],
             "std::web" => &[],
+            "std::desktop" if cfg!(windows) => &["user32", "gdi32"],
+            "std::desktop" => &[],
             _ => &[],
         };
         for lib in needed {
@@ -279,6 +282,10 @@ fn prepare(src: &Path, links: &[toolchain::LinkItem]) -> Result<Prepared, BloomE
         .functions
         .iter()
         .any(|sig| sig.module == "std::auth");
+    let uses_desktop = checked
+        .functions
+        .iter()
+        .any(|sig| sig.module == "std::desktop");
     let mut extra_sources = Vec::new();
     let mut defines = Vec::new();
     let mut include_dirs = Vec::new();
@@ -344,6 +351,7 @@ fn prepare(src: &Path, links: &[toolchain::LinkItem]) -> Result<Prepared, BloomE
         extra_sources,
         defines,
         include_dirs,
+        uses_desktop,
     })
 }
 
@@ -377,7 +385,7 @@ fn write_emit_c(prepared: &Prepared, emit_c: &Path) -> Result<(), BloomError> {
     Ok(())
 }
 
-fn build_exe(prepared: &Prepared) -> Result<PathBuf, BloomError> {
+fn build_exe(prepared: &Prepared, force_console: bool) -> Result<PathBuf, BloomError> {
     let tool = toolchain::detect().ok_or_else(|| {
         BloomError::Toolchain(format!(
             "kein C-Compiler gefunden\n\n{}",
@@ -394,6 +402,7 @@ fn build_exe(prepared: &Prepared) -> Result<PathBuf, BloomError> {
             &prepared.extra_sources,
             &prepared.defines,
             &prepared.include_dirs,
+            prepared.uses_desktop && !force_console,
         )
         .map_err(|output| BloomError::NativeCompile {
             toolchain: tool.label(),
@@ -407,12 +416,13 @@ pub fn build(
     out: &Path,
     emit_c: Option<&Path>,
     links: &[toolchain::LinkItem],
+    force_console: bool,
 ) -> Result<(), BloomError> {
     let prepared = prepare(src, links)?;
     if let Some(path) = emit_c {
         write_emit_c(&prepared, path)?;
     }
-    let exe = build_exe(&prepared)?;
+    let exe = build_exe(&prepared, force_console)?;
     if let Some(parent) = out.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent).map_err(|e| {
@@ -434,9 +444,13 @@ pub fn build(
     Ok(())
 }
 
-pub fn run(src: &Path, links: &[toolchain::LinkItem]) -> Result<i32, BloomError> {
+pub fn run(
+    src: &Path,
+    links: &[toolchain::LinkItem],
+    force_console: bool,
+) -> Result<i32, BloomError> {
     let prepared = prepare(src, links)?;
-    let exe = build_exe(&prepared)?;
+    let exe = build_exe(&prepared, force_console)?;
     let status = Command::new(&exe).status().map_err(|e| {
         BloomError::Io(format!(
             "program `{}` could not be started: {}",

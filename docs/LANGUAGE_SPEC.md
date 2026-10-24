@@ -2102,6 +2102,139 @@ pub struct TableOptions { caption: string }
   oder als eigener Wert enthalten; `std::ui` bietet dafür bewusst keinen
   fertigen Helfer, damit nichts automatisch als „sicher“ gilt.
 
+### 13.17 Standardmodul `std::desktop` (native Windows-Fenster)
+
+`std::desktop` erzeugt echte Win32-Fenster und native Steuerelemente.
+Es ist **nicht** `std::ui`: `std::ui` liefert HTML für Webseiten,
+`std::desktop` öffnet Desktopfenster. Das Modul ist nur unter Windows
+verfügbar; auf anderen Systemen liefert jeder Aufruf (außer
+`available()`) einen Fehler.
+
+```bloom
+use std::desktop;
+
+fn run() -> Result<int, string> {
+    let win = desktop::window_create("Hallo", 320, 200)?;
+    desktop::label_create(win, "Name:", 16, 16, 80, 24)?;
+    let _input = desktop::text_input_create(win, "", 100, 14, 180, 26)?;
+    desktop::button_create(win, "OK", 16, 60, 100, 32)?;
+    desktop::window_show(win)?;
+    while desktop::window_alive(win) {
+        match desktop::next_event(win) {
+            Result::Ok(ev) => println(ev.kind + " " + str(ev.control)),
+            Result::Err(e) => println("Ende: " + e)
+        };
+    }
+    return Result::Ok(0);
+}
+```
+
+| Funktion | Signatur |
+| --- | --- |
+| `available()` | `() -> bool` |
+| `window_create(title, width, height)` | `string, int, int -> Result<Window, string>` |
+| `window_show(window)` / `window_hide(window)` | `Window -> Result<bool, string>` |
+| `window_set_title(window, title)` | `Window, string -> Result<bool, string>` |
+| `window_set_size(window, width, height)` | `Window, int, int -> Result<bool, string>` |
+| `window_set_position(window, x, y)` | `Window, int, int -> Result<bool, string>` |
+| `window_close(window)` | `Window -> Result<bool, string>` |
+| `window_alive(window)` | `Window -> bool` |
+| `window_dpi(window)` | `Window -> Result<int, string>` |
+| `window_client_size(window)` | `Window -> Result<Size, string>` |
+| `message_box(title, message)` | `string, string -> Result<bool, string>` |
+| `label_create(window, text, x, y, width, height)` | `Window, string, int, int, int, int -> Result<int, string>` |
+| `button_create(window, text, x, y, width, height)` | `Window, string, int, int, int, int -> Result<int, string>` |
+| `text_input_create(window, text, x, y, width, height)` | `Window, string, int, int, int, int -> Result<int, string>` |
+| `checkbox_create(window, text, x, y, width, height)` | `Window, string, int, int, int, int -> Result<int, string>` |
+| `control_text(window, control)` | `Window, int -> Result<string, string>` |
+| `control_set_text(window, control, text)` | `Window, int, string -> Result<bool, string>` |
+| `control_checked(window, control)` | `Window, int -> Result<bool, string>` |
+| `control_set_checked(window, control, checked)` | `Window, int, bool -> Result<bool, string>` |
+| `control_enabled(window, control)` | `Window, int -> Result<bool, string>` |
+| `control_set_enabled(window, control, enabled)` | `Window, int, bool -> Result<bool, string>` |
+| `control_visible(window, control)` | `Window, int -> Result<bool, string>` |
+| `control_set_visible(window, control, visible)` | `Window, int, bool -> Result<bool, string>` |
+| `control_bounds(window, control)` | `Window, int -> Result<Bounds, string>` |
+| `control_set_bounds(window, control, x, y, width, height)` | `Window, int, int, int, int, int -> Result<bool, string>` |
+| `control_focus(window, control)` | `Window, int -> Result<bool, string>` |
+| `next_event(window)` | `Window -> Result<Event, string>` |
+
+```bloom
+pub struct Window { id }
+pub struct Event { kind: string, control: int, text: string, checked: bool }
+pub struct Bounds { x: int, y: int, width: int, height: int }
+pub struct Size { width: int, height: int }
+```
+
+- **Fenster:** `window_create` erzeugt ein verborgenes
+  `WS_OVERLAPPEDWINDOW` (max. 64 Fenster pro Prozess). `window_show`
+  macht es sichtbar. Titel und alle Texte sind UTF-8 und werden vor der
+  Win32-Grenze validiert und nach UTF-16 konvertiert. Steuerzeichen
+  (auch `\n`), eingebettete NUL-Bytes und mehr als 1 MiB werden
+  abgelehnt. `width`/`height` sind die gewünschte **Clientgröße** in
+  logischen Einheiten (1..16384).
+- **Controls:** IDs werden pro Fenster ab 100 vergeben (max. 512
+  Controls). Ein Control gehört immer zu genau einem Fenster; nach dem
+  Schließen sind alle Control-IDs ungültig. `label`, `button`,
+  `text_input` und `checkbox` sind die unterstützten Arten;
+  `control_checked` gilt nur für Checkboxen. `control_set_text` bei einer
+  Texteingabe löst bewusst **kein** `input`-Ereignis aus; Tippen und
+  `WM_SETTEXT` von außen schon.
+- **Ereignisse:** `next_event` wartet blockierend (kein Polling) auf das
+  nächste Ereignis und verarbeitet dabei Windows-Nachrichten. Arten:
+  `"click"` (Button), `"check"` (Checkbox, `checked` enthält den neuen
+  Zustand), `"input"` (Texteingabe, `text` enthält den aktuellen Text)
+  und `"close"` (Fenster geschlossen). `control` ist die ID, bei
+  `"close"` 0. Pro Fenster gibt es eine Warteschlange mit 64 Plätzen;
+  ist sie voll, wird das älteste Ereignis verworfen. Nach dem
+  Schließen liefert `next_event` zuerst das `"close"`-Ereignis (falls
+  noch nicht abgeholt) und danach `Err("window is closed")`.
+- **Schließen:** `window_close` ist idempotent (`Ok(false)` beim zweiten
+  Aufruf). Das native Fenster wird sofort zerstört; `window_alive` ist
+  danach `false`. Schließt der Benutzer über das X, wird intern
+  dasselbe `"close"`-Ereignis erzeugt. Ein wiederholtes Schließen oder
+  ein Zugriff auf ein geschlossenes Fenster kann keine doppelte
+  Freigabe auslösen.
+- **Lebensdauer:** `Window` ist ein referenzgezähltes Handle. Kopien
+  halten das Fenster am Leben; der letzte Handle zerstört das native
+  Fenster, auch wenn `window_close` nie aufgerufen wurde. Controls
+  werden mit dem Fenster zerstört. Alle Desktop-Aufrufe (inklusive
+  Scope-Ende) müssen auf dem Thread laufen, der das Fenster erzeugt
+  hat; die Runtime prüft das und liefert sonst einen Fehler.
+- **Koordinaten und DPI:** `x`, `y`, `width`, `height` sind logische
+  Einheiten bei 96 DPI. Die Runtime wandelt mit der DPI des Fensters
+  (`GetDpiForWindow`, Fallback System-DPI) in physische Pixel um.
+  Beim ersten Fenster wird Per-Monitor-v2-Awareness gesetzt, mit
+  Fallbacks für ältere Systeme. `WM_DPICHANGED` übernimmt den
+  vorgeschlagenen Fensterrahmen; **Controls werden nicht automatisch
+  skaliert** — die Anwendung muss `control_set_bounds` selbst erneut
+  aufrufen. Die Schrift ist `DEFAULT_GUI_FONT` und wird nicht
+  per-Monitor angepasst.
+- **Fensterposition:** `window_set_position` erwartet logische
+  Bildschirmkoordinaten. Bei Monitoren mit unterschiedlicher DPI kann
+  die Umrechnung an den Randbereichen ungenau sein; das ist eine
+  dokumentierte Grenze der ersten Version.
+- **Fehler:** Alle falliblen Funktionen liefern `Result<…, string>` mit
+  dem Operationsnamen als Präfix (`window_create: …`,
+  `control_text: …`). Ungültige Größen, unbekannte IDs, falsche
+  Control-Typen, geschlossene Fenster und Nicht-Windows werden
+  kontrolliert abgelehnt. `message_box` ist modal und blockiert den
+  Aufrufer, bis der Benutzer bestätigt.
+- **Build:** Wird `std::desktop` verwendet, linkt Bloom unter MSVC mit
+  `/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup`; die `main`-Funktion und
+  die C-Runtime bleiben erhalten, aber es öffnet sich kein
+  Konsolenfenster. `bloom build datei.blm --console` erzwingt das
+  Konsolen-Subsystem (nützlich für Tests und `println`). Der erzeugte
+  C-Code enthält die Win32-Runtime; `--emit-c` schreibt sie mit.
+  Benötigte Bibliotheken (`user32`, `gdi32`) werden automatisch
+  gelinkt.
+- **Grenzen:** ein GUI-Thread, keine Callbacks/Closures, keine
+  automatische Layout-Engine, keine Menüs/Toolbars/weiteren Controls,
+  kein eigenes Rendering, kein Direct3D, keine
+  plattformübergreifende Oberfläche. `std::desktop` und `std::ui`
+  können in einem Programm verwendet werden (Weboberfläche und
+  Desktopfenster), teilen aber keine Widgets.
+
 ## 14. Fehlerdiagnostik
 
 Format:
@@ -2195,7 +2328,7 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
 | 5 | Datei-/E/A-Fehler |
 | 70 | Laufzeitfehler im Bloom-Programm |
 
-## 16. Ausdrücklich nicht unterstützt (Version 0.20.0)
+## 16. Ausdrücklich nicht unterstützt (Version 0.21.0)
 
 - Referenzempfänger (`&self`/`&mut self`), `var self` auf Enums
 - Klassen, Vererbung, Interfaces
@@ -2233,6 +2366,11 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
   automatische Formularvalidierung im Browser** (std::ui liefert
   statisches, maskiertes HTML und ein festes Stylesheet; Verhalten im
   Browser ist nicht Teil der Sprache)
+- **Native Desktop-APIs außerhalb von Windows, Menüs, Toolbars,
+  Tree-/Tabellen-Controls, Dialogbibliotheken, eigenes Rendering,
+  Direct3D, automatische Layouts/DPI-Skalierung und Thread-sichere
+  Fenster** (std::desktop ist ein einzelner GUI-Thread mit Labels,
+  Buttons, einzeiligen Eingaben und Checkboxen)
 - **OAuth/OIDC, externe Login-Anbieter, E-Mail-Verifikation,
   Passwort-zurücksetzen per E-Mail, MFA/Passkeys, JWT als
   Session-Ersatz, verteilte Session-Stores, ABAC/Policy-Sprachen,

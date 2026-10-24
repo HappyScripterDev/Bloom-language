@@ -1,0 +1,69 @@
+// Texteingabe: der Button uebernimmt den Text in ein Ausgabelabel.
+// Waehrend des Tippens zeigt ein zweites Label den Live-Wert.
+use std::desktop;
+
+fn fail(e: string) -> bool {
+    println("FEHLER: " + e);
+    return false;
+}
+
+fn copy_text(win: desktop::Window, input: int, output: int) -> void {
+    match desktop::control_text(win, input) {
+        Result::Ok(text) => set_output(win, output, text),
+        Result::Err(e) => println("Lesen: " + e)
+    };
+}
+
+fn set_output(win: desktop::Window, output: int, text: string) -> void {
+    match desktop::control_set_text(win, output, "Ausgabe: " + text) {
+        Result::Ok(_) => println("Ausgabe: " + text),
+        Result::Err(e) => println("Schreiben: " + e)
+    };
+}
+
+fn on_event(win: desktop::Window, ev: desktop::Event, input: int, output: int, live: int) -> bool {
+    if ev.kind == "click" {
+        copy_text(win, input, output);
+    } else if ev.kind == "input" {
+        set_output(win, live, ev.text);
+    } else if ev.kind == "close" {
+        println("Fenster geschlossen");
+    }
+    return true;
+}
+
+fn step(win: desktop::Window, input: int, output: int, live: int) -> bool {
+    return match desktop::next_event(win) {
+        Result::Ok(ev) => on_event(win, ev, input, output, live),
+        Result::Err(e) => fail(e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let win = desktop::window_create("Bloom Desktop: Eingabe", 480, 240)?;
+    desktop::label_create(win, "Name:", 24, 20, 80, 24)?;
+    let input = desktop::text_input_create(win, "", 100, 18, 340, 26)?;
+    let output = desktop::label_create(win, "Ausgabe: ", 24, 64, 420, 24)?;
+    desktop::label_create(win, "Live:", 24, 100, 80, 24)?;
+    let live = desktop::label_create(win, "", 100, 100, 340, 24)?;
+    desktop::button_create(win, "Uebernehmen", 100, 148, 180, 36)?;
+    desktop::window_show(win)?;
+    while step(win, input, output, live) {
+        if ! desktop::window_alive(win) {
+            break;
+        }
+    }
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

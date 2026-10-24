@@ -990,6 +990,98 @@ doppelt einhängen.
   Login-Formularen gehört der Token weiterhin in die Seite und wird
   serverseitig mit `web::csrf_check` geprüft.
 
+## 16f. Native Desktopfenster mit `std::desktop` (Windows)
+
+`std::desktop` erzeugt echte Win32-Fenster. Das ist etwas anderes als
+`std::ui` aus Abschnitt 16e: `std::ui` baut Webseiten aus HTML,
+`std::desktop` öffnet Desktopfenster ohne Browser und ohne Webserver.
+Das Modul gibt es nur unter Windows.
+
+```powershell
+cargo build --release
+.\target\release\bloom.exe run examples\desktop_hello.blm
+```
+
+Ein eigenes Programm:
+
+```bloom
+use std::desktop;
+
+fn run() -> Result<int, string> {
+    let win = desktop::window_create("Hallo Desktop", 360, 220)?;
+    desktop::label_create(win, "Dein Name:", 16, 16, 100, 24)?;
+    let input = desktop::text_input_create(win, "", 120, 14, 200, 26)?;
+    let status = desktop::label_create(win, "Noch nichts eingegeben.", 16, 60, 320, 24)?;
+    desktop::button_create(win, "Uebernehmen", 16, 100, 140, 32)?;
+    desktop::window_show(win)?;
+
+    while desktop::window_alive(win) {
+        match desktop::next_event(win) {
+            Result::Ok(ev) => handle(win, ev, input, status),
+            Result::Err(e) => println("Ende: " + e)
+        };
+    }
+    return Result::Ok(0);
+}
+
+fn handle(win: desktop::Window, ev: desktop::Event, input: int, status: int) -> void {
+    if ev.kind == "click" {
+        match desktop::control_text(win, input) {
+            Result::Ok(text) => set_status(win, status, "Hallo, " + text),
+            Result::Err(e) => println("Lesen: " + e)
+        };
+    } else if ev.kind == "close" {
+        println("Fenster geschlossen");
+    }
+}
+```
+
+Wichtig ist die Schleife: `next_event` wartet blockierend auf ein
+Ereignis und verarbeitet dabei die Windows-Nachrichten. Ereignisarten
+sind `"click"`, `"check"`, `"input"` und `"close"`; `ev.control` ist
+die Control-ID, `ev.text` der aktuelle Text, `ev.checked` der neue
+Checkbox-Zustand.
+
+### Bauen: ohne Konsolenfenster
+
+Sobald ein Programm `std::desktop` verwendet, linkt Bloom es als
+GUI-Anwendung. Es öffnet sich also kein zusätzliches Konsolenfenster:
+
+```powershell
+.\target\release\bloom.exe build examples\desktop_hello.blm
+.\examples\desktop_hello.exe
+```
+
+Für Tests und für `println`-Ausgaben gibt es den Schalter `--console`:
+
+```powershell
+.\target\release\bloom.exe build examples\desktop_counter.blm --console
+.\examples\desktop_counter.exe
+```
+
+Damit bleibt das Programm eine normale Konsolenanwendung, öffnet aber
+weiterhin ein Fenster. Der Unterschied ist nur das PE-Subsystem
+(`WINDOWS` statt `CONSOLE`).
+
+### Koordinaten, DPI und Layout
+
+`x`, `y`, `width` und `height` sind logische Einheiten bei 96 DPI.
+Unter Windows 11 mit 150 % Skalierung wird z. B. ein 300 Pixel breites
+Fenster physisch etwa 450 Pixel breit. `window_client_size` liefert die
+logische Größe zurück, `window_dpi` die aktuelle DPI. Beim Wechsel auf
+einen anderen Monitor passt Windows den Rahmen an; Controls müssen mit
+`control_set_bounds` selbst neu positioniert werden.
+
+### Grenzen
+
+- Nur Windows; auf anderen Systemen liefert `available()` `false` und
+  alle anderen Aufrufe einen Fehler.
+- Ein GUI-Thread, keine Threads, keine Callbacks.
+- Labels, Buttons, einzeilige Eingabefelder, Checkboxen; keine Menüs,
+  Tabellen, Tree-Views oder eigenen Zeichenflächen.
+- Keine automatische Layout-Engine; Positionen werden explizit gesetzt.
+- `message_box` ist modal und braucht eine Benutzeraktion.
+
 ## 17. HTTPS
 
 ```bloom

@@ -1,0 +1,70 @@
+// Zaehler mit drei Buttons. Der Zustand liegt in einem Array,
+// das an den Ereignishandler weitergereicht wird.
+use std::desktop;
+
+var wert: int = 0;
+
+fn fail(e: string) -> bool {
+    println("FEHLER: " + e);
+    return false;
+}
+
+fn update(win: desktop::Window, label: int, wert: int) -> void {
+    match desktop::control_set_text(win, label, "Wert: " + str(wert)) {
+        Result::Ok(_) => println("Wert: " + str(wert)),
+        Result::Err(e) => println("Label: " + e)
+    };
+}
+
+fn on_event(win: desktop::Window, ev: desktop::Event, label: int, hoch: int, runter: int, reset: int) -> bool {
+    if ev.kind == "click" {
+        if ev.control == hoch {
+            wert = wert + 1;
+        } else if ev.control == runter {
+            wert = wert - 1;
+            if wert < 0 {
+                wert = 0;
+            }
+        } else if ev.control == reset {
+            wert = 0;
+        }
+        update(win, label, wert);
+    } else if ev.kind == "close" {
+        println("Fenster geschlossen");
+    }
+    return true;
+}
+
+fn step(win: desktop::Window, label: int, hoch: int, runter: int, reset: int) -> bool {
+    return match desktop::next_event(win) {
+        Result::Ok(ev) => on_event(win, ev, label, hoch, runter, reset),
+        Result::Err(e) => fail(e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let win = desktop::window_create("Bloom Desktop: Zaehler", 460, 220)?;
+    let label = desktop::label_create(win, "Wert: 0", 24, 20, 400, 32)?;
+    let hoch = desktop::button_create(win, "+1", 24, 80, 90, 36)?;
+    let runter = desktop::button_create(win, "-1", 124, 80, 90, 36)?;
+    let reset = desktop::button_create(win, "Zuruecksetzen", 224, 80, 160, 36)?;
+    desktop::window_show(win)?;
+    while step(win, label, hoch, runter, reset) {
+        if ! desktop::window_alive(win) {
+            break;
+        }
+    }
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

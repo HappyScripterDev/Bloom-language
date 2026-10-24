@@ -1,0 +1,61 @@
+// Native Windows-Fenster mit std::desktop: ein Fenster und zwei Labels.
+// Kompilieren und starten:
+//   bloom run examples/desktop_hello.blm
+// Das Fenster bleibt offen, bis es geschlossen wird.
+use std::desktop;
+
+fn on_event(ev: desktop::Event) -> bool {
+    if ev.kind == "close" {
+        println("Fenster geschlossen");
+    } else {
+        println("Ereignis: " + ev.kind);
+    }
+    return true;
+}
+
+fn fail(e: string) -> bool {
+    println("FEHLER: " + e);
+    return false;
+}
+
+fn step(win: desktop::Window) -> bool {
+    return match desktop::next_event(win) {
+        Result::Ok(ev) => on_event(ev),
+        Result::Err(e) => fail(e)
+    };
+}
+
+fn pump(win: desktop::Window) -> void {
+    while step(win) {
+        if ! desktop::window_alive(win) {
+            break;
+        }
+    }
+}
+
+fn build() -> Result<desktop::Window, string> {
+    let win = desktop::window_create("Bloom Desktop: Hallo", 420, 200)?;
+    desktop::label_create(win, "Hallo, native Windows-Welt!", 24, 24, 360, 32)?;
+    desktop::label_create(win, "Schliessen ueber das X.", 24, 64, 360, 24)?;
+    return Result::Ok(win);
+}
+
+fn start(win: desktop::Window) -> int {
+    match desktop::window_show(win) {
+        Result::Ok(_) => pump(win),
+        Result::Err(e) => println("FEHLER: " + e)
+    };
+    return 0;
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match build() {
+        Result::Ok(win) => start(win),
+        Result::Err(e) => fehler(e)
+    };
+}

@@ -260,6 +260,22 @@ es); Tabellen halten `thead`/`tbody` ebenfalls geliehen und besitzen sie
 nur über die Kinderliste. Alle UI-Tests inklusive des HTTP-Servers
 prüfen `live allocations: 0` und `live sockets: 0`.
 
+**Das Desktopfenster (`std::desktop::Window`, `Type::DesktopWindow`) ist
+ein referenzgezähltes Handle.** Der Zähler schützt den
+`bloom_desktop_window`-Block und die Control-Registry, nicht das native
+HWND: Das Fenster wird beim ersten `window_close` (oder `WM_CLOSE`)
+sofort zerstört. Kopien halten den Handle am Leben, dessen letzter
+Besitzer räumt die Registry und die Ereignis-Warteschlange auf und
+zerstört ein noch offenes Fenster. Control-IDs (Integer, pro Fenster ab
+100) sind keine Besitzwerte; sie werden nach dem Schließen abgelehnt
+(`IsWindow`-Prüfung plus Closed-Flag) und können keine native Ressource
+doppelt freigeben. Jedes Fenster zählt in `live allocations`; die
+Ereignis-Warteschlange ist auf 64 Einträge begrenzt und gibt Textkopien
+beim Verwerfen bzw. beim Scope-Ende frei. Alle Aufrufe müssen auf dem
+Erzeuger-Thread laufen; die Runtime prüft das und liefert sonst `Err`.
+Die Desktop-Tests prüfen `live allocations: 0`, zerstörte Fenster
+(`IsWindow == 0`) und wiederholtes Schließen.
+
 Alle Stdlib-Tests
 laufen unter `BLOOM_MEM_REPORT=1`. Getestet wird nativ mit MSVC
 (Windows). Valgrind/ASan sind auf dieser Toolchain nicht verfügbar und

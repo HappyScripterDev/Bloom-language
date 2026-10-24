@@ -1,0 +1,62 @@
+// Fehlerpfade: ungueltige Masse, unbekannte Controls, falsche Typen,
+// geschlossene Fenster und wiederholtes Schliessen.
+use std::desktop;
+
+fn report(label: string, err: string) -> void {
+    println(label + "=" + err);
+}
+
+fn cases(win: desktop::Window) -> void {
+    match desktop::window_create("X", 0, 100) {
+        Result::Ok(_) => println("bad-window=accepted"),
+        Result::Err(e) => report("bad-window", e)
+    };
+    match desktop::label_create(win, "x", 0, 0, 0, 20) {
+        Result::Ok(_) => println("bad-bounds=accepted"),
+        Result::Err(e) => report("bad-bounds", e)
+    };
+    match desktop::control_text(win, 9999) {
+        Result::Ok(_) => println("unknown=accepted"),
+        Result::Err(e) => report("unknown", e)
+    };
+    match desktop::control_checked(win, 100) {
+        Result::Ok(_) => println("wrong-type=accepted"),
+        Result::Err(e) => report("wrong-type", e)
+    };
+    match desktop::control_set_text(win, 100, "a\tb") {
+        Result::Ok(_) => println("tab=accepted"),
+        Result::Err(e) => report("tab", e)
+    };
+    match desktop::window_close(win) {
+        Result::Ok(closed) => println("closed=" + str(closed)),
+        Result::Err(e) => println("close: " + e)
+    };
+    println("alive=" + str(desktop::window_alive(win)));
+    match desktop::window_close(win) {
+        Result::Ok(closed) => println("closed-again=" + str(closed)),
+        Result::Err(e) => println("close-again: " + e)
+    };
+    match desktop::control_text(win, 100) {
+        Result::Ok(_) => println("after-close=accepted"),
+        Result::Err(e) => report("after-close", e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let win = desktop::window_create("Bloom Desktop: Fehler", 240, 140)?;
+    desktop::label_create(win, "Fehlerdemo", 16, 16, 200, 24)?;
+    cases(win);
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

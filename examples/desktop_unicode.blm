@@ -1,0 +1,53 @@
+// Unicode: Umlaute und Emoji in Titel, Labels und Eingabefeld.
+// Der Text wird geschrieben, zurueckgelesen und verglichen.
+use std::desktop;
+
+fn fail(e: string) -> bool {
+    println("FEHLER: " + e);
+    return false;
+}
+
+fn on_event(ev: desktop::Event) -> bool {
+    if ev.kind == "close" {
+        println("Fenster geschlossen");
+    } else if ev.kind == "input" {
+        println("Eingabe: " + ev.text);
+    }
+    return true;
+}
+
+fn step(win: desktop::Window) -> bool {
+    return match desktop::next_event(win) {
+        Result::Ok(ev) => on_event(ev),
+        Result::Err(e) => fail(e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let win = desktop::window_create("Bloom Desktop: Gruesse", 520, 240)?;
+    let text = "Gruesse, 日本語 🚀";
+    desktop::label_create(win, text, 24, 20, 460, 28)?;
+    let input = desktop::text_input_create(win, text, 24, 64, 460, 28)?;
+    let back = desktop::control_text(win, input)?;
+    println("unicode-roundtrip=" + str(back == text));
+    println("unicode-len=" + str(len(back)));
+    desktop::window_show(win)?;
+    while step(win) {
+        if ! desktop::window_alive(win) {
+            break;
+        }
+    }
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

@@ -110,6 +110,7 @@ impl Toolchain {
         extra_sources: &[String],
         defines: &[String],
         include_dirs: &[String],
+        gui: bool,
     ) -> Result<PathBuf, String> {
         match self {
             Toolchain::Msvc { vcvars, .. } => compile_msvc(
@@ -121,6 +122,7 @@ impl Toolchain {
                 extra_sources,
                 defines,
                 include_dirs,
+                gui,
             ),
             Toolchain::GnuLike { exe, kind } => compile_gnu(
                 exe,
@@ -132,6 +134,7 @@ impl Toolchain {
                 extra_sources,
                 defines,
                 include_dirs,
+                gui,
             ),
         }
     }
@@ -164,9 +167,13 @@ fn compile_msvc(
     extra_sources: &[String],
     defines: &[String],
     include_dirs: &[String],
+    gui: bool,
 ) -> Result<PathBuf, String> {
     let bat_path = workdir.join("bloom_build.bat");
     let mut link_args = String::new();
+    if gui {
+        link_args.push_str("/link /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup ");
+    }
     for item in links {
         let arg = item.msvc_arg();
         link_args.push(' ');
@@ -224,6 +231,7 @@ fn compile_gnu(
     extra_sources: &[String],
     defines: &[String],
     include_dirs: &[String],
+    gui: bool,
 ) -> Result<PathBuf, String> {
     let mut cmd = Command::new(exe);
     cmd.current_dir(workdir);
@@ -237,6 +245,9 @@ fn compile_gnu(
         cmd.args(["-o", exe_name, c_name]);
     } else {
         cmd.args(["-O2", "-o", exe_name, c_name, "-lm"]);
+        if gui {
+            cmd.arg("-mwindows");
+        }
     }
     for source in extra_sources {
         cmd.arg(source);

@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 fn bloom_bin() -> PathBuf {
@@ -11057,6 +11057,632 @@ fn key_cases(limiter: auth::Limiter) -> void {
         "{}",
         out.combined()
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(windows)]
+mod desktop_win32 {
+    pub type Hwnd = isize;
+
+    #[repr(C)]
+    pub struct Rect {
+        pub left: i32,
+        pub top: i32,
+        pub right: i32,
+        pub bottom: i32,
+    }
+
+    pub const WM_SETTEXT: u32 = 0x000C;
+    pub const WM_CLOSE: u32 = 0x0010;
+    pub const BM_CLICK: u32 = 0x00F5;
+
+    #[link(name = "user32")]
+    extern "system" {
+        pub fn EnumWindows(cb: extern "system" fn(Hwnd, isize) -> i32, lparam: isize) -> i32;
+        pub fn GetWindowThreadProcessId(hwnd: Hwnd, pid: *mut u32) -> u32;
+        pub fn GetWindowTextLengthW(hwnd: Hwnd) -> i32;
+        pub fn GetWindowTextW(hwnd: Hwnd, buf: *mut u16, max: i32) -> i32;
+        pub fn GetDlgItem(hwnd: Hwnd, id: i32) -> Hwnd;
+        pub fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
+        pub fn PostMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> i32;
+        pub fn IsWindow(hwnd: Hwnd) -> i32;
+        pub fn GetClientRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
+    }
+}
+
+#[cfg(windows)]
+struct DesktopFindState {
+    pid: u32,
+    prefix: String,
+    found: isize,
+}
+
+#[cfg(windows)]
+extern "system" fn desktop_enum_cb(hwnd: isize, lp: isize) -> i32 {
+    let state = unsafe { &mut *(lp as *mut DesktopFindState) };
+    let mut pid: u32 = 0;
+    unsafe {
+        desktop_win32::GetWindowThreadProcessId(hwnd, &mut pid);
+    }
+    if pid != state.pid {
+        return 1;
+    }
+    let title = unsafe { desktop_window_title(hwnd) };
+    if title.starts_with(&state.prefix) {
+        state.found = hwnd;
+        return 0;
+    }
+    1
+}
+
+#[cfg(windows)]
+unsafe fn desktop_window_title(hwnd: isize) -> String {
+    let len = desktop_win32::GetWindowTextLengthW(hwnd);
+    if len <= 0 {
+        return String::new();
+    }
+    let mut buf = vec![0u16; (len + 1) as usize];
+    let got = desktop_win32::GetWindowTextW(hwnd, buf.as_mut_ptr(), len + 1);
+    if got <= 0 {
+        return String::new();
+    }
+    String::from_utf16_lossy(&buf[..got as usize])
+}
+
+#[cfg(windows)]
+fn desktop_find_window(pid: u32, prefix: &str) -> Option<isize> {
+    let mut state = DesktopFindState {
+        pid,
+        prefix: prefix.to_string(),
+        found: 0,
+    };
+    unsafe {
+        desktop_win32::EnumWindows(
+            desktop_enum_cb,
+            &mut state as *mut DesktopFindState as isize,
+        );
+    }
+    if state.found == 0 {
+        None
+    } else {
+        Some(state.found)
+    }
+}
+
+#[cfg(windows)]
+fn desktop_wait_window(pid: u32, prefix: &str) -> isize {
+    for _ in 0..100 {
+        if let Some(hwnd) = desktop_find_window(pid, prefix) {
+            return hwnd;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("desktop window with prefix `{prefix}` not found");
+}
+
+#[cfg(windows)]
+struct DesktopRun {
+    child: std::process::Child,
+    reader: std::io::BufReader<std::process::ChildStdout>,
+}
+
+#[cfg(windows)]
+impl DesktopRun {
+    fn read_line(&mut self) -> String {
+        use std::io::BufRead;
+        let mut line = String::new();
+        let n = self.reader.read_line(&mut line).expect("read line");
+        assert!(n > 0, "desktop program exited before printing a line");
+        line.trim_end_matches(['\r', '\n']).to_string()
+    }
+
+    fn finish(mut self) -> (i32, String, String) {
+        use std::io::Read;
+        let status = self.child.wait().expect("wait desktop child");
+        let mut rest = String::new();
+        self.reader.read_to_string(&mut rest).expect("read rest");
+        let mut stderr = String::new();
+        self.child
+            .stderr
+            .take()
+            .expect("stderr")
+            .read_to_string(&mut stderr)
+            .expect("stderr read");
+        (status.code().unwrap_or(-1), norm(&rest), norm(&stderr))
+    }
+}
+
+#[cfg(windows)]
+fn desktop_spawn(exe: &PathBuf) -> DesktopRun {
+    let mut child = Command::new(exe)
+        .env("BLOOM_MEM_REPORT", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn desktop program");
+    let reader = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+    DesktopRun { child, reader }
+}
+
+#[cfg(windows)]
+fn desktop_send_text(hwnd: isize, text: &str) {
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        desktop_win32::SendMessageW(hwnd, desktop_win32::WM_SETTEXT, 0, wide.as_ptr() as isize);
+    }
+}
+
+#[cfg(windows)]
+fn desktop_click(hwnd: isize) {
+    unsafe {
+        desktop_win32::SendMessageW(hwnd, desktop_win32::BM_CLICK, 0, 0);
+    }
+}
+
+#[cfg(windows)]
+fn desktop_close(hwnd: isize) {
+    unsafe {
+        desktop_win32::PostMessageW(hwnd, desktop_win32::WM_CLOSE, 0, 0);
+    }
+}
+
+#[cfg(windows)]
+fn desktop_build(dir: &Path, name: &str, source: &str, console: bool) -> Option<PathBuf> {
+    let src = dir.join(format!("{name}.blm"));
+    write_file(&src, source);
+    let exe = dir.join(format!("{name}.exe"));
+    let mut args = vec![
+        "build".to_string(),
+        src.to_string_lossy().to_string(),
+        "-o".to_string(),
+        exe.to_string_lossy().to_string(),
+    ];
+    if console {
+        args.push("--console".to_string());
+    }
+    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let build = run_bloom(&refs);
+    if no_toolchain(&build) {
+        eprintln!("skipping: no C toolchain available");
+        return None;
+    }
+    assert_eq!(build.code, 0, "{}", build.combined());
+    Some(exe)
+}
+
+#[cfg(windows)]
+fn pe_subsystem(path: &std::path::Path) -> u16 {
+    let bytes = std::fs::read(path).expect("read exe");
+    assert!(bytes.len() > 0x100, "exe too small");
+    let pe = u32::from_le_bytes(bytes[0x3C..0x40].try_into().unwrap()) as usize;
+    assert_eq!(&bytes[pe..pe + 4], b"PE\0\0");
+    u16::from_le_bytes(
+        bytes[pe + 4 + 20 + 68..pe + 4 + 20 + 70]
+            .try_into()
+            .unwrap(),
+    )
+}
+
+#[cfg(windows)]
+#[test]
+fn desktop_api_natively() {
+    let dir = temp_dir("desktop-api");
+    let exe = match desktop_build(
+        &dir,
+        "desktop_errors",
+        &std::fs::read_to_string(example("desktop_errors.blm")).expect("example"),
+        true,
+    ) {
+        Some(p) => p,
+        None => return,
+    };
+    let out = Command::new(&exe)
+        .env("BLOOM_MEM_REPORT", "1")
+        .output()
+        .expect("run desktop_errors");
+    let stdout = norm(&String::from_utf8_lossy(&out.stdout));
+    let stderr = norm(&String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.status.code(), Some(0), "{stdout}\n{stderr}");
+    for needle in [
+        "bad-window=window_create: width and height must be between 1 and 16384 logical units",
+        "bad-bounds=label_create:",
+        "unknown=control_text: unknown control id",
+        "wrong-type=control_checked: control has the wrong type",
+        "tab=control_set_text:",
+        "closed=true",
+        "alive=false",
+        "closed-again=false",
+        "after-close=control_text: window is closed",
+    ] {
+        assert!(stdout.contains(needle), "missing `{needle}` in {stdout}");
+    }
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(windows)]
+#[test]
+fn desktop_window_events_natively() {
+    let dir = temp_dir("desktop-events");
+    let source = r#"use std::desktop;
+
+fn handle(ev: desktop::Event) -> bool {
+    if ev.kind == "click" {
+        println("click:" + str(ev.control));
+    } else if ev.kind == "check" {
+        println("check:" + str(ev.control) + "=" + str(ev.checked));
+    } else if ev.kind == "input" {
+        println("input:" + str(ev.control) + ":" + ev.text);
+    } else if ev.kind == "close" {
+        println("close");
+    }
+    return true;
+}
+
+fn fail(e: string) -> bool {
+    println("loop-error: " + e);
+    return false;
+}
+
+fn step(win: desktop::Window) -> bool {
+    return match desktop::next_event(win) {
+        Result::Ok(ev) => handle(ev),
+        Result::Err(e) => fail(e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let win = desktop::window_create("Bloom IT Events", 360, 220)?;
+    desktop::label_create(win, "Text:", 10, 10, 60, 24)?;
+    desktop::text_input_create(win, "", 80, 10, 240, 24)?;
+    desktop::button_create(win, "Klick", 10, 60, 100, 30)?;
+    desktop::checkbox_create(win, "Aktiv", 10, 100, 120, 24)?;
+    println("READY");
+    desktop::window_show(win)?;
+    while step(win) {
+        if !desktop::window_alive(win) {
+            break;
+        }
+    }
+    println("LOOP-END");
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+"#;
+    let exe = match desktop_build(&dir, "desktop_events", source, true) {
+        Some(p) => p,
+        None => return,
+    };
+    let mut run = desktop_spawn(&exe);
+    assert_eq!(run.read_line(), "READY");
+    let hwnd = desktop_wait_window(run.child.id(), "Bloom IT Events");
+    assert_eq!(unsafe { desktop_window_title(hwnd) }, "Bloom IT Events");
+    let edit = unsafe { desktop_win32::GetDlgItem(hwnd, 101) };
+    let button = unsafe { desktop_win32::GetDlgItem(hwnd, 102) };
+    let checkbox = unsafe { desktop_win32::GetDlgItem(hwnd, 103) };
+    assert!(edit != 0 && button != 0 && checkbox != 0);
+    desktop_send_text(edit, "Grüße, 日本語 🚀");
+    desktop_click(button);
+    desktop_click(checkbox);
+    desktop_close(hwnd);
+    let (code, rest, stderr) = run.finish();
+    assert_eq!(code, 0, "{rest}\n{stderr}");
+    assert!(rest.contains("input:101:Grüße, 日本語 🚀"), "{rest}");
+    assert!(rest.contains("click:102"), "{rest}");
+    assert!(rest.contains("check:103=true"), "{rest}");
+    assert!(rest.contains("close"), "{rest}");
+    assert!(rest.contains("LOOP-END"), "{rest}");
+    assert!(
+        !rest.contains("loop-error"),
+        "no loop error expected: {rest}"
+    );
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    assert!(
+        unsafe { desktop_win32::IsWindow(hwnd) } == 0,
+        "window must be destroyed after close"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(windows)]
+#[test]
+fn desktop_lifecycle_natively() {
+    let dir = temp_dir("desktop-lifecycle");
+    let source = r#"use std::desktop;
+
+fn run() -> Result<int, string> {
+    let a = desktop::window_create("Bloom IT Life A", 220, 140)?;
+    let b = desktop::window_create("Bloom IT Life B", 220, 140)?;
+    let ab = desktop::button_create(a, "A", 10, 10, 80, 30)?;
+    let bb = desktop::button_create(b, "B", 10, 10, 80, 30)?;
+    println("alive=" + str(desktop::window_alive(a) && desktop::window_alive(b)));
+    println("ids=" + str(ab) + "/" + str(bb));
+    println("READY");
+    let first = match desktop::next_event(a) {
+        Result::Ok(ev) => ev.kind,
+        Result::Err(e) => "err"
+    };
+    println("first=" + first);
+    let second = match desktop::next_event(b) {
+        Result::Ok(ev) => ev.kind,
+        Result::Err(e) => "err"
+    };
+    println("second=" + second);
+    match desktop::window_close(a) {
+        Result::Ok(closed) => println("closed-a=" + str(closed)),
+        Result::Err(e) => println("close-a: " + e)
+    };
+    println("alive-a=" + str(desktop::window_alive(a)));
+    match desktop::window_close(a) {
+        Result::Ok(closed) => println("closed-a2=" + str(closed)),
+        Result::Err(e) => println("close-a2: " + e)
+    };
+    match desktop::window_close(b) {
+        Result::Ok(closed) => println("closed-b=" + str(closed)),
+        Result::Err(e) => println("close-b: " + e)
+    };
+    match desktop::control_text(b, bb) {
+        Result::Ok(_) => println("after-close=accepted"),
+        Result::Err(e) => println("after-close=" + e)
+    };
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+"#;
+    let exe = match desktop_build(&dir, "desktop_lifecycle", source, true) {
+        Some(p) => p,
+        None => return,
+    };
+    let mut run = desktop_spawn(&exe);
+    assert_eq!(run.read_line(), "alive=true");
+    assert_eq!(run.read_line(), "ids=100/100");
+    assert_eq!(run.read_line(), "READY");
+    let a = desktop_wait_window(run.child.id(), "Bloom IT Life A");
+    let b = desktop_wait_window(run.child.id(), "Bloom IT Life B");
+    let button = unsafe { desktop_win32::GetDlgItem(a, 100) };
+    assert!(button != 0);
+    desktop_click(button);
+    desktop_close(b);
+    let (code, rest, stderr) = run.finish();
+    assert_eq!(code, 0, "{rest}\n{stderr}");
+    assert!(rest.contains("first=click"), "{rest}");
+    assert!(rest.contains("second=close"), "{rest}");
+    assert!(rest.contains("closed-a=true"), "{rest}");
+    assert!(rest.contains("alive-a=false"), "{rest}");
+    assert!(rest.contains("closed-a2=false"), "{rest}");
+    assert!(rest.contains("closed-b=false"), "{rest}");
+    assert!(
+        rest.contains("after-close=control_text: window is closed"),
+        "{rest}"
+    );
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(windows)]
+#[test]
+fn desktop_dpi_natively() {
+    let dir = temp_dir("desktop-dpi");
+    let source = r#"use std::desktop;
+
+fn fail(e: string) -> bool {
+    println("FEHLER: " + e);
+    return false;
+}
+
+fn step(win: desktop::Window) -> bool {
+    return match desktop::next_event(win) {
+        Result::Ok(ev) => true,
+        Result::Err(e) => fail(e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let win = desktop::window_create("Bloom IT DPI", 300, 200)?;
+    let first = desktop::window_client_size(win)?;
+    let dpi = desktop::window_dpi(win)?;
+    desktop::window_set_size(win, 450, 250)?;
+    let second = desktop::window_client_size(win)?;
+    println("dpi=" + str(dpi));
+    println("client=" + str(first.width) + "x" + str(first.height));
+    println("client2=" + str(second.width) + "x" + str(second.height));
+    println("READY");
+    desktop::window_show(win)?;
+    while step(win) {
+        if !desktop::window_alive(win) {
+            break;
+        }
+    }
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+"#;
+    let exe = match desktop_build(&dir, "desktop_dpi", source, true) {
+        Some(p) => p,
+        None => return,
+    };
+    let mut run = desktop_spawn(&exe);
+    let dpi_line = run.read_line();
+    let first = run.read_line();
+    let second = run.read_line();
+    assert_eq!(run.read_line(), "READY");
+    let dpi: i64 = dpi_line
+        .strip_prefix("dpi=")
+        .expect("dpi line")
+        .parse()
+        .expect("dpi number");
+    assert!((96..=960).contains(&dpi), "{dpi_line}");
+    assert_eq!(first, "client=300x200");
+    assert_eq!(second, "client2=450x250");
+    let hwnd = desktop_wait_window(run.child.id(), "Bloom IT DPI");
+    let mut rect = desktop_win32::Rect {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    let ok = unsafe { desktop_win32::GetClientRect(hwnd, &mut rect) };
+    assert!(ok != 0);
+    let pw = rect.right - rect.left;
+    let ph = rect.bottom - rect.top;
+    let expect_w = ((450 * dpi + 48) / 96) as i32;
+    let expect_h = ((250 * dpi + 48) / 96) as i32;
+    assert!(
+        (pw - expect_w).abs() <= 2,
+        "physical width {pw}, expected {expect_w} at dpi {dpi}"
+    );
+    assert!(
+        (ph - expect_h).abs() <= 2,
+        "physical height {ph}, expected {expect_h} at dpi {dpi}"
+    );
+    desktop_close(hwnd);
+    let (code, rest, stderr) = run.finish();
+    assert_eq!(code, 0, "{rest}\n{stderr}");
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(windows)]
+#[test]
+fn desktop_examples_natively() {
+    let dir = temp_dir("desktop-examples");
+    let interactive = [
+        "desktop_hello.blm",
+        "desktop_button.blm",
+        "desktop_input.blm",
+        "desktop_checkbox.blm",
+        "desktop_counter.blm",
+        "desktop_layout.blm",
+        "desktop_unicode.blm",
+    ];
+    for name in interactive {
+        let stem = name.trim_end_matches(".blm");
+        let source = std::fs::read_to_string(example(name)).expect("read example");
+        let exe = match desktop_build(&dir, stem, &source, true) {
+            Some(p) => p,
+            None => return,
+        };
+        let run = desktop_spawn(&exe);
+        let hwnd = desktop_wait_window(run.child.id(), "Bloom Desktop");
+        desktop_close(hwnd);
+        let (code, rest, stderr) = run.finish();
+        assert_eq!(code, 0, "{name}: {rest}\n{stderr}");
+        assert!(!rest.contains("FEHLER"), "{name} reported an error: {rest}");
+        assert!(stderr.contains("live allocations: 0"), "{name}: {stderr}");
+        if name == "desktop_unicode.blm" {
+            assert!(rest.contains("unicode-roundtrip=true"), "{name}: {rest}");
+        }
+    }
+    let errors = match desktop_build(
+        &dir,
+        "desktop_errors_example",
+        &std::fs::read_to_string(example("desktop_errors.blm")).expect("read example"),
+        true,
+    ) {
+        Some(p) => p,
+        None => return,
+    };
+    let out = Command::new(&errors)
+        .env("BLOOM_MEM_REPORT", "1")
+        .output()
+        .expect("run errors example");
+    let stdout = norm(&String::from_utf8_lossy(&out.stdout));
+    let stderr = norm(&String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(stdout.contains("closed=true"), "{stdout}");
+    assert!(stdout.contains("closed-again=false"), "{stdout}");
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(windows)]
+#[test]
+fn desktop_gui_subsystem_e2e() {
+    use std::io::Read;
+
+    let dir = temp_dir("desktop-gui");
+    let source = std::fs::read_to_string(example("desktop_hello.blm")).expect("read example");
+    let console = match desktop_build(&dir, "desktop_hello_console", &source, true) {
+        Some(p) => p,
+        None => return,
+    };
+    let gui = match desktop_build(&dir, "desktop_hello_gui", &source, false) {
+        Some(p) => p,
+        None => return,
+    };
+    assert_eq!(pe_subsystem(&console), 3, "console build must be CONSOLE");
+    assert_eq!(pe_subsystem(&gui), 2, "desktop build must be WINDOWS");
+
+    let mut child = Command::new(&gui)
+        .env("BLOOM_MEM_REPORT", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn gui build");
+    let hwnd = desktop_wait_window(child.id(), "Bloom Desktop");
+    desktop_close(hwnd);
+    let status = child.wait().expect("wait gui");
+    assert_eq!(status.code(), Some(0));
+    let mut rest = String::new();
+    child
+        .stdout
+        .take()
+        .expect("stdout")
+        .read_to_string(&mut rest)
+        .expect("stdout read");
+
+    let c_path = dir.join("desktop_hello.c");
+    let src = dir.join("desktop_hello_emit.blm");
+    write_file(&src, &source);
+    let build = run_bloom(&[
+        "build",
+        src.to_string_lossy().as_ref(),
+        "-o",
+        dir.join("desktop_hello_emit.exe")
+            .to_string_lossy()
+            .as_ref(),
+        "--emit-c",
+        c_path.to_string_lossy().as_ref(),
+        "--console",
+    ]);
+    assert_eq!(build.code, 0, "{}", build.combined());
+    let emitted = std::fs::read_to_string(&c_path).expect("emitted C");
+    assert!(emitted.contains("bloom_desktop_window_create"));
+    assert!(emitted.contains("CreateWindowExW"));
+    assert!(emitted.contains("bloom_desktop_next_event"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
