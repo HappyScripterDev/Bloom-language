@@ -168,12 +168,79 @@ impl Drop for TempDir {
 const SQLITE_C: &str = include_str!("../runtime/sqlite3.c");
 const SQLITE_H: &str = include_str!("../runtime/sqlite3.h");
 
+/// Vendored Argon2 reference implementation (CC0/Apache-2.0). Copied into
+/// the build directory only for programs that load `std::auth`.
+const ARGON2_FILES: &[(&str, &str)] = &[
+    (
+        "argon2/include/argon2.h",
+        include_str!("../runtime/argon2/include/argon2.h"),
+    ),
+    (
+        "argon2/src/argon2.c",
+        include_str!("../runtime/argon2/src/argon2.c"),
+    ),
+    (
+        "argon2/src/core.c",
+        include_str!("../runtime/argon2/src/core.c"),
+    ),
+    (
+        "argon2/src/core.h",
+        include_str!("../runtime/argon2/src/core.h"),
+    ),
+    (
+        "argon2/src/encoding.c",
+        include_str!("../runtime/argon2/src/encoding.c"),
+    ),
+    (
+        "argon2/src/encoding.h",
+        include_str!("../runtime/argon2/src/encoding.h"),
+    ),
+    (
+        "argon2/src/ref.c",
+        include_str!("../runtime/argon2/src/ref.c"),
+    ),
+    (
+        "argon2/src/thread.c",
+        include_str!("../runtime/argon2/src/thread.c"),
+    ),
+    (
+        "argon2/src/thread.h",
+        include_str!("../runtime/argon2/src/thread.h"),
+    ),
+    (
+        "argon2/src/blake2/blake2.h",
+        include_str!("../runtime/argon2/src/blake2/blake2.h"),
+    ),
+    (
+        "argon2/src/blake2/blake2b.c",
+        include_str!("../runtime/argon2/src/blake2/blake2b.c"),
+    ),
+    (
+        "argon2/src/blake2/blake2-impl.h",
+        include_str!("../runtime/argon2/src/blake2/blake2-impl.h"),
+    ),
+    (
+        "argon2/src/blake2/blamka-round-ref.h",
+        include_str!("../runtime/argon2/src/blake2/blamka-round-ref.h"),
+    ),
+];
+const ARGON2_SOURCES: &[&str] = &[
+    "argon2/src/argon2.c",
+    "argon2/src/core.c",
+    "argon2/src/encoding.c",
+    "argon2/src/ref.c",
+    "argon2/src/thread.c",
+    "argon2/src/blake2/blake2b.c",
+];
+
 struct Prepared {
     c_code: String,
     _tmp: TempDir,
     c_path: PathBuf,
     links: Vec<toolchain::LinkItem>,
     extra_sources: Vec<String>,
+    defines: Vec<String>,
+    include_dirs: Vec<String>,
 }
 
 /// Link inputs implied by loaded standard library modules.
@@ -208,7 +275,13 @@ fn prepare(src: &Path, links: &[toolchain::LinkItem]) -> Result<Prepared, BloomE
     let tmp = TempDir::new("bloom")?;
     let c_path = tmp.path.join("program.c");
     let uses_db = checked.functions.iter().any(|sig| sig.module == "std::db");
+    let uses_auth = checked
+        .functions
+        .iter()
+        .any(|sig| sig.module == "std::auth");
     let mut extra_sources = Vec::new();
+    let mut defines = Vec::new();
+    let mut include_dirs = Vec::new();
     if uses_db {
         fs::write(tmp.path.join("sqlite3.c"), SQLITE_C).map_err(|e| {
             BloomError::Io(format!("SQLite amalgamation could not be written: {}", e))
@@ -216,6 +289,34 @@ fn prepare(src: &Path, links: &[toolchain::LinkItem]) -> Result<Prepared, BloomE
         fs::write(tmp.path.join("sqlite3.h"), SQLITE_H)
             .map_err(|e| BloomError::Io(format!("SQLite header could not be written: {}", e)))?;
         extra_sources.push("sqlite3.c".to_string());
+        defines.extend(
+            [
+                "SQLITE_THREADSAFE=0",
+                "SQLITE_OMIT_LOAD_EXTENSION",
+                "SQLITE_DQS=0",
+            ]
+            .iter()
+            .map(|s| s.to_string()),
+        );
+    }
+    if uses_auth {
+        for (rel, content) in ARGON2_FILES {
+            let path = tmp.path.join(rel);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|e| {
+                    BloomError::Io(format!("Argon2 directory could not be created: {}", e))
+                })?;
+            }
+            fs::write(&path, content).map_err(|e| {
+                BloomError::Io(format!(
+                    "Argon2 source `{}` could not be written: {}",
+                    rel, e
+                ))
+            })?;
+        }
+        extra_sources.extend(ARGON2_SOURCES.iter().map(|s| s.to_string()));
+        defines.push("ARGON2_NO_THREADS".to_string());
+        include_dirs.push("argon2/include".to_string());
     }
     fs::write(&c_path, &c_code).map_err(|e| {
         BloomError::Io(format!(
@@ -241,6 +342,8 @@ fn prepare(src: &Path, links: &[toolchain::LinkItem]) -> Result<Prepared, BloomE
         c_path,
         links: all_links,
         extra_sources,
+        defines,
+        include_dirs,
     })
 }
 
@@ -289,6 +392,8 @@ fn build_exe(prepared: &Prepared) -> Result<PathBuf, BloomError> {
             toolchain::exe_name(),
             &prepared.links,
             &prepared.extra_sources,
+            &prepared.defines,
+            &prepared.include_dirs,
         )
         .map_err(|output| BloomError::NativeCompile {
             toolchain: tool.label(),

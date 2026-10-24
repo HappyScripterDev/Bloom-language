@@ -27,11 +27,7 @@ fn setup(dir: string) -> void {
         Result::Ok(_) => println("Verzeichnis bereit"),
         Result::Err(e) => println("FEHLER: " + e)
     };
-    write_demo_file(
-        fs::join_path(dir, "index.html"),
-        "<!doctype html><html><head><link rel=\"stylesheet\" href=\"/style.css\"></head>" +
-        "<body><h1>Statische Dateien</h1><script src=\"/sub/app.js\"></script></body></html>"
-    );
+    write_demo_file(fs::join_path(dir, "index.html"), "<!doctype html><html><head><link rel=\"stylesheet\" href=\"/style.css\"></head>" + "<body><h1>Statische Dateien</h1><script src=\"/sub/app.js\"></script></body></html>");
     write_demo_file(fs::join_path(dir, "style.css"), "body { font-family: sans-serif; }");
     write_demo_file(fs::join_path(dir, "sub/app.js"), "console.log('hallo');");
     write_demo_file(fs::join_path(dir, "data.json"), "{\"ok\":true}");

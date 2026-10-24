@@ -12,7 +12,7 @@ use std::fs;
 fn count_notes(database: db::Database) -> Result<int, string> {
     let stmt = db::prepare(database, "SELECT count(*) FROM notes")?;
     let has_row = db::step(stmt)?;
-    if !has_row {
+    if ! has_row {
         return Result::Err("keine Zeile");
     }
     return db::column_int(stmt, 0);
@@ -107,13 +107,7 @@ fn handle(conn: int, tmpl: html::Template, database: db::Database, request: http
 }
 
 fn serve(database: db::Database) -> Result<int, string> {
-    let src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Notizen</title></head>" +
-        "<body><h1>Notizen ({{count}})</h1>" +
-        "<form method=\"post\" action=\"/add\">" +
-        "<p><input name=\"text\" placeholder=\"Neue Notiz\"> " +
-        "<button type=\"submit\">Speichern</button></p></form>" +
-        "<p>{{message}}</p><ul>{{#each notes}}<li>{{this}}</li>{{/each}}</ul>" +
-        "</body></html>";
+    let src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Notizen</title></head>" + "<body><h1>Notizen ({{count}})</h1>" + "<form method=\"post\" action=\"/add\">" + "<p><input name=\"text\" placeholder=\"Neue Notiz\"> " + "<button type=\"submit\">Speichern</button></p></form>" + "<p>{{message}}</p><ul>{{#each notes}}<li>{{this}}</li>{{/each}}</ul>" + "</body></html>";
     let tmpl = html::template(src)?;
     let create = db::prepare(database, "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text TEXT)")?;
     db::execute(create)?;

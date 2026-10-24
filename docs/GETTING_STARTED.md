@@ -770,6 +770,118 @@ Session-Handle noch im Store gilt. Nach `destroy` oder Ablauf ist es
 `false`; die Daten am Handle bleiben lesbar, sind aber keine gültige
 Identität mehr.
 
+## 16d. Anmeldung für eine Web-App (std::auth)
+
+Das komplette Beispiel liegt in `examples/web_auth_app.blm`. Hier ist der
+Weg von einem neuen Projekt dorthin, in PowerShell auf Windows 11.
+
+```powershell
+cargo build --release
+.\target\release\bloom.exe init AuthDemo
+cd AuthDemo
+Copy-Item ..\examples\web_auth_app.blm src\main.blm
+```
+
+Der Server legt seine Datenbank beim Start selbst an (`setup`) und
+beendet sich nach 21 Anfragen; für den echten Betrieb lässt man die
+Schleife einfach laufen. Starten:
+
+```powershell
+..\target\release\bloom.exe run src\main.blm
+```
+
+Die Ausgabe nennt den Port. Dann im Browser `http://127.0.0.1:<port>/`
+öffnen und ein Konto registrieren. Login, geschützte Seite, Logout und
+Passwortwechsel funktionieren ohne weitere Einrichtung.
+
+### Wie die Anmeldung aufgebaut ist
+
+1. **Registrieren** (`GET /register`, `POST /register`): Formular mit
+   CSRF-Token, `auth::register_user`. Der Benutzername wird normalisiert
+   (getrimmt, klein, 3..32 Zeichen `a-z 0-9 . _ -`), das Passwort muss
+   8..1024 Bytes haben. Passwörter werden nie getrimmt oder abgeschnitten.
+2. **Anmelden** (`POST /login`): erst CSRF prüfen, dann
+   `auth::login(store, session, database, benutzername, passwort)`.
+   Das verifiziert das Passwort mit Argon2id, **rotiert die Session**
+   (neue ID, neuer Token) und speichert nur `_auth_user_id` und
+   `_auth_version`. Die Antwort setzt den neuen Session-Cookie.
+3. **Geschützt** (`GET /protected`): `auth::current_user` prüft, ob die
+   Session registriert, das Konto aktiv und die `auth_version` aktuell
+   ist. Sonst 403 — ein Bloom-Handle allein ist keine Anmeldung.
+4. **Admin** (`GET /admin`): zusätzlich `auth::has_role(database, id,
+   "admin")`. Eine Anmeldung ist keine Berechtigung.
+5. **Abmelden** (`POST /logout`): CSRF prüfen, dann `auth::logout`
+   (löscht die Session serverseitig) und `web::delete_cookie`.
+6. **Passwort ändern** (`POST /account/password`): CSRF, dann
+   `auth::password_change`; das erhöht `auth_version`, macht alle
+   älteren Sessions ungültig und meldet die aktuelle Session ab.
+7. **Konto deaktivieren** (`POST /admin/disable`, nur Admin):
+   `auth::user_find` + `auth::user_disable`; auch das erhöht
+   `auth_version`.
+
+Der Login-Limiter (`auth::limiter(256, 300, 5)`) zählt Versuche pro
+normalisiertem Benutzernamen. Die Web-API kennt keine vertrauenswürdige
+Client-IP; der Schlüssel kommt deshalb aus der Anwendung, nicht aus
+`X-Forwarded-For`.
+
+### Rollen vergeben
+
+Es gibt keinen eingebauten Admin. Ein Operator vergibt die Rolle einmalig
+mit einem kleinen Programm gegen dieselbe Datenbank:
+
+```bloom
+use std::auth;
+use std::db;
+
+fn main() -> int {
+    match db::open("bloom_auth_demo/app.db") {
+        Result::Ok(database) => seed(database),
+        Result::Err(e) => println("DB-Fehler: " + e)
+    };
+    return 0;
+}
+
+fn seed(database: db::Database) -> void {
+    match auth::setup(database) {
+        Result::Ok(_) => grant(database),
+        Result::Err(e) => println("Schema-Fehler: " + e)
+    };
+}
+
+fn grant(database: db::Database) -> void {
+    match auth::user_find(database, "admin") {
+        Result::Ok(id) => {
+            auth::role_create(database, "admin");
+            auth::role_assign(database, id, "admin");
+            println("admin ist jetzt Administrator");
+        },
+        Result::Err(e) => println("Benutzer fehlt: " + e)
+    };
+}
+```
+
+Das Programm muss in dem Verzeichnis laufen, in dem die App ihre
+`bloom_auth_demo/app.db` ablegt.
+
+### Für den echten Betrieb
+
+- **HTTPS ist Pflicht.** Bloom hat keinen HTTPS-Server; betreibe die App
+  hinter einem TLS-Terminator (Reverse Proxy) und setze
+  `web::session_cookie` statt `session_cookie_insecure`. Das Beispiel
+  nutzt die unsichere Variante nur, weil es lokal über HTTP läuft.
+- Die Web-API liefert keine vertrauenswürdige Client-IP. Verlasse dich
+  nicht auf vom Client gesetzte Header; wähle den Limiter-Schlüssel
+  selbst.
+- Sessions liegen im Speicher des Prozesses und enden mit ihm. Die
+  absolute Lebensdauer ist begrenzt; ein Neustart meldet alle ab.
+- Argon2id braucht ca. 120 ms und 64 MiB pro Hash (gemessen auf einem
+  Ryzen 7 5800X). Begrenze parallele Login-Versuche über den Limiter.
+- Die Datenbank enthält Passwort-Hashes (kein Klartext). Sichere sie wie
+  andere personenbezogene Daten und protokolliere weder Passwörter noch
+  Hashes.
+- `SameSite` und `HttpOnly` sind gesetzt, ersetzen aber keine
+  CSRF-Prüfung; jeder verändernde Endpunkt ruft `csrf_check` selbst auf.
+
 ## 17. HTTPS
 
 ```bloom

@@ -16,8 +16,7 @@ fn print_doc(doc: json::JsonValue) -> void {
 }
 
 fn main() -> int {
-    let text = "{\"project\":\"bloom\",\"versions\":[0,11,12]," +
-        "\"stable\":true,\"notes\":null,\"limits\":{\"depth\":128,\"input\":8388608}}";
+    let text = "{\"project\":\"bloom\",\"versions\":[0,11,12]," + "\"stable\":true,\"notes\":null,\"limits\":{\"depth\":128,\"input\":8388608}}";
     match json::parse(text) {
         Result::Ok(doc) => print_doc(doc),
         Result::Err(e) => println("FEHLER: " + e)

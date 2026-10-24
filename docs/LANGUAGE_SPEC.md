@@ -1388,6 +1388,7 @@ if m.status == 200 {
 | `csrf_rotate(session)` | `Session -> Result<string, string>` |
 | `csrf_clear(session)` | `Session -> void` |
 | `session_registered(store, session)` | `SessionStore, Session -> bool` |
+| `session_regenerate(store, session)` | `SessionStore, Session -> Result<Session, string>` |
 
 ```bloom
 pub struct Router { id }   // undurchsichtiges, verwaltetes Handle
@@ -1586,6 +1587,16 @@ pub struct CookieOptions {
   (eine solche Funktion gibt es nicht); `session_new` erzeugt immer
   eine neue Kennung. Sessions gehen beim Prozessende verloren; einen
   verteilten Store gibt es nicht.
+- **Session-Rotation:** `session_regenerate(store, session)` ersetzt eine
+  **registrierte** Session durch eine neue: neue 32-Byte-ID, neuer
+  CSRF-Token, dieselben Daten (dasselbe JSON-Objekt) und dieselbe
+  absolute Ablaufzeit. Die alte ID wird sofort aus dem Store entfernt
+  (`session_load` damit schlägt fehl); das alte Handle behält seine
+  Daten, ist aber nicht mehr registriert. Ist die Session bereits
+  abgelaufen oder gelöscht oder schlägt die Zufallsquelle fehl, ändert
+  sich nichts und das Ergebnis ist `Err`. Anwendungen rufen das nach
+  erfolgreicher Anmeldung auf (macht `auth::login` bereits) oder wenn
+  Rechte wechseln, um Session Fixation zu verhindern.
 - **Session-Cookies:** `session_cookie(session, name, max_age)` erzeugt
   eine `Set-Cookie`-Zeile mit `Path=/`, `HttpOnly`, `Secure`,
   `SameSite=Lax`, `Max-Age=max_age` (1..31536000).
@@ -1815,6 +1826,142 @@ pub struct Statement { id }  // verwaltetes Handle, hält die Datenbank am Leben
   potenziell angreifbar und müssen beim Ausgeben weiterhin escaped
   werden (HTML-Templates tun das automatisch).
 
+### 13.15 Standardmodul `std::auth` (Konten, Rollen, Anmeldung)
+
+```bloom
+use std::auth;
+use std::db;
+
+let database = db::open("app.db")?;
+auth::setup(database)?;
+let id = auth::register_user(database, "Ada", "ein langes Passwort")?;
+let login = auth::authenticate(database, "ada", "ein langes Passwort")?;
+```
+
+| Funktion | Signatur |
+| --- | --- |
+| `password_hash(password)` | `string -> Result<string, string>` |
+| `password_verify(password, hash)` | `string, string -> Result<bool, string>` |
+| `password_needs_rehash(hash)` | `string -> Result<bool, string>` |
+| `setup(database)` | `Database -> Result<bool, string>` |
+| `register_user(database, username, password)` | `Database, string, string -> Result<int, string>` |
+| `authenticate(database, username, password)` | `Database, string, string -> Result<int, string>` |
+| `user_find(database, username)` | `Database, string -> Result<int, string>` |
+| `user_get(database, user_id)` | `Database, int -> Result<UserInfo, string>` |
+| `user_disable(database, user_id)` / `user_enable(database, user_id)` | `Database, int -> Result<bool, string>` |
+| `password_change(database, user_id, new_password)` | `Database, int, string -> Result<bool, string>` |
+| `login(store, session, database, username, password)` | `SessionStore, Session, Database, string, string -> Result<Session, string>` |
+| `logout(store, session)` | `SessionStore, Session -> Result<bool, string>` |
+| `current_user(database, store, session)` | `Database, SessionStore, Session -> Result<Option<UserInfo>, string>` |
+| `role_create(database, role)` / `role_delete(database, role)` | `Database, string -> Result<bool, string>` |
+| `role_assign(database, user_id, role)` / `role_remove(database, user_id, role)` | `Database, int, string -> Result<bool, string>` |
+| `roles_of(database, user_id)` | `Database, int -> Result<[string], string>` |
+| `has_role(database, user_id, role)` | `Database, int, string -> Result<bool, string>` |
+| `limiter(max_entries, window_seconds, max_attempts)` | `int, int, int -> Result<Limiter, string>` |
+| `limiter_check(limiter, key)` | `Limiter, string -> Result<bool, string>` |
+| `limiter_reset(limiter, key)` | `Limiter, string -> bool` |
+| `limiter_count(limiter)` / `limiter_expire(limiter)` | `Limiter -> int` |
+
+```bloom
+pub struct UserInfo { id: int, username: string, display_name: string, active: bool, auth_version: int }
+pub struct Limiter { id }   // verwaltetes Handle
+```
+
+- **Argon2id:** eingebettete Referenzimplementierung **20190702**
+  (`runtime/argon2/`, CC0/Apache-2.0, Hinweise in
+  `runtime/argon2_NOTICE.md`), ohne Threads kompiliert. Standardparameter:
+  `m=65536` KiB (64 MiB), `t=3`, `p=1`, Salt 16 Bytes, Tag 32 Bytes
+  (RFC 9106, zweite Empfehlung mit p=1; mindestens die OWASP-Untergrenze).
+  Gemessen auf einem AMD Ryzen 7 5800X unter Windows 11: etwa
+  **115–120 ms** pro Hash (MSVC-Release, 5 Läufe, Einzelprozess).
+- **Hashformat:** PHC-String
+  `$argon2id$v=19$m=65536,t=3,p=1$<salt-base64>$<hash-base64>`
+  (Standard-Base64 ohne Padding). Jedes Passwort bekommt ein eigenes
+  Zufalls-Salt; der Hash enthält nie Klartext.
+- **Verifikation:** `password_verify` prüft den PHC-String **vor** dem
+  Aufruf der Bibliothek: nur Argon2id, Version 19, `8 MiB <= m <= 256 MiB`,
+  `1 <= t <= 10`, `1 <= p <= 4`, Salt 8..64 Bytes, Tag 16..64 Bytes,
+  höchstens 512 Zeichen. Unplausible Parameter werden abgelehnt, ohne
+  Speicher zu reservieren. Der Vergleich läuft über `argon2id_verify`
+  (konstante Zeit in der Bibliothek). `password_needs_rehash` liefert
+  `true`, wenn Version oder Parameter vom Standard abweichen (z. B. für
+  den bekannten Testvektor mit `t=2`).
+- **Passwortregeln:** Kein Trimmen, keine Normalisierung, kein
+  Abschneiden. Neue Passwörter: **8..1024 Bytes** (Bytes, nicht Zeichen);
+  keine Zeichenklassen-Pflicht. `password_verify` akzeptiert 0..1024
+  Bytes, damit alte gültige Passwörter weiter funktionieren.
+  `password_hash`/`password_change`/`register_user` wenden die
+  Mindestregel an.
+- **Schema (Version 1):** eigene Tabellen `bloom_auth_meta`
+  (`schema_version`), `bloom_auth_users` (id, eindeutiger normalisierter
+  `username`, `display_name`, `password_hash`, `active`,
+  `auth_version`, `created_at`), `bloom_auth_roles` und
+  `bloom_auth_user_roles` (Primärschlüssel user_id+role). `setup` ist
+  idempotent und läuft in einer Transaktion. Eine fremde oder neuere
+  Auth-Schema-Version wird abgelehnt (`unsupported auth schema version`),
+  ebenso vorhandene `bloom_auth_*`-Tabellen ohne Metatabelle.
+- **Benutzernamen:** ASCII, getrimmt, **case-insensitiv normalisiert**
+  (klein), 3..32 Bytes, Zeichen `a-z 0-9 . _ -`, erstes Zeichen
+  Buchstabe oder Ziffer. `display_name` behält die Schreibweise der
+  Eingabe (getrimmt). Es gibt **keine** Unicode-Identitäts- oder
+  Homoglyph-Behandlung. Doppelte normalisierte Namen verhindert der
+  `UNIQUE`-Constraint (nicht nur ein vorheriges `SELECT`).
+- **Registrierung:** prüft Name und Passwort vor dem Hashen, hasht
+  außerhalb der Einfügeoperation und schreibt genau eine Zeile. Ein
+  Duplikat wird als `username is already taken` gemeldet; es entstehen
+  keine Teilzeilen. Alle Werte sind gebunden (keine SQL-Interpolation).
+- **Anmeldung:** `authenticate` normalisiert den Namen, lädt Hash/Status/
+  Version und verifiziert. Unbekannter Name und falsches Passwort liefern
+  **dieselbe** Meldung `invalid credentials`; für unbekannte Namen wird
+  derselbe Argon2id-Aufwand mit einem Dummy-Hash ausgeführt. Deaktivierte
+  Konten werden ebenfalls generisch abgelehnt. Fehler der Datenbank werden
+  davon unterschieden (eigene `Err`-Texte). Perfekte Timing-Gleichheit
+  wird nicht behauptet.
+- **Sessions:** `login` verifiziert zuerst und ruft dann
+  `web::session_regenerate` auf (neue ID, neuer CSRF-Token, gleiche Daten,
+  gleiche absolute Lebensdauer); erst die neue Session gilt als
+  angemeldet. Gespeichert werden nur `_auth_user_id` und
+  `_auth_version` in den Sessiondaten — **keine Passwörter oder Hashes**.
+  `current_user` prüft in dieser Reihenfolge: Session registriert (nicht
+  abgelaufen), Schlüssel vorhanden, Benutzer existiert, aktiv und
+  `auth_version` stimmt. Jede Abweichung ergibt `Ok(None)`
+  (nicht angemeldet); Datenbankfehler ergeben `Err`. Ein lebendes
+  Bloom-Handle ist keine gültige Anmeldung.
+- **Invalidierung:** `password_change`, `user_disable` und `user_enable`
+  erhöhen `auth_version`. Alle älteren Sessions werden dadurch beim
+  nächsten `current_user` abgelehnt. `logout` löscht die serverseitige
+  Session (`session_destroy`); der Cookie wird von der Anwendung mit
+  `delete_cookie` entfernt. Logout und Passwortwechsel sind
+  zustandsverändernd und müssen per `POST` mit CSRF-Prüfung laufen.
+- **Rollen:** Rollennamen werden wie Benutzernamen normalisiert
+  (1..64 Bytes). `role_create` ist idempotent (`false` = existierte
+  bereits). Unbekannte Rollen werden bei `role_assign` abgelehnt und bei
+  `has_role` als `false` behandelt — nie als Freigabe. `role_delete`
+  entfernt die Rolle samt Zuordnungen in einer Transaktion. Es gibt
+  **keinen** Standard-Admin und keine vorinstallierten Konten; Rollen
+  werden von einem Operator/einem Setup-Programm vergeben. Eine bloße
+  Session ist kein Berechtigungsnachweis.
+- **Rate-Limiter:** `limiter(max_entries, window_seconds, max_attempts)`
+  mit 1..65536 Einträgen, Fenster 1..86400 s und 1..1000 Versuchen pro
+  Fenster. `limiter_check` zählt pro Schlüssel (1..256 Bytes) im festen
+  Zeitfenster (monotone Uhr): `true` = erlaubt (und gezählt), `false` =
+  gesperrt (nicht gezählt). Abgelaufene Einträge werden bei jedem Zugriff
+  entfernt. Ist die Tabelle voll und ist nichts abgelaufen, wird der
+  Eintrag mit dem ältesten Fenster ersetzt — der Speicher bleibt
+  beschränkt; ein Flut neuer Schlüssel kann dadurch andere Zähler
+  verdrängen. Der Limiter arbeitet **pro Prozess**, ist kein verteilter
+  Schutz und ersetzt keine Authentifizierung. Die Web-API stellt keine
+  vertrauenswürdige Client-IP bereit; der Schlüssel wird von der
+  Anwendung gewählt (z. B. normalisierter Benutzername) und darf nicht
+  ungeprüft aus clientgesteuerten Headern stammen.
+- **Sicherheitsgrenzen:** `std::auth` schützt keine Route automatisch.
+  Anwendungen müssen bei Login, Logout, Passwortwechsel und anderen
+  Änderungen selbst CSRF prüfen (`csrf_check`), HTTPS verwenden und
+  Session-Cookies mit `Secure` senden. Die Beispiele nutzen bewusst
+  `insecure_http` nur für lokale HTTP-Demos. `SameSite` ersetzt keine
+  CSRF-Prüfung. Passwort-Hashes und Sessiondaten dürfen nicht geloggt
+  werden.
+
 ## 14. Fehlerdiagnostik
 
 Format:
@@ -1908,7 +2055,7 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
 | 5 | Datei-/E/A-Fehler |
 | 70 | Laufzeitfehler im Bloom-Programm |
 
-## 16. Ausdrücklich nicht unterstützt (Version 0.18.0)
+## 16. Ausdrücklich nicht unterstützt (Version 0.19.0)
 
 - Referenzempfänger (`&self`/`&mut self`), `var self` auf Enums
 - Klassen, Vererbung, Interfaces
@@ -1941,6 +2088,11 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
   Prozesses und sind keine Anmeldung)
 - **Datenbanken außer SQLite, ORMs, Schema-Migrationen,
   Connection-Pools, asynchrone Datenbankzugriffe, Savepoints**
+- **OAuth/OIDC, externe Login-Anbieter, E-Mail-Verifikation,
+  Passwort-zurücksetzen per E-Mail, MFA/Passkeys, JWT als
+  Session-Ersatz, verteilte Session-Stores, ABAC/Policy-Sprachen,
+  automatische Rollenvererbung, Admin-Dashboards** (std::auth liefert
+  die Grundlagen, keine vollständige Identitätsplattform)
 - **C-Structs by value, Funktionszeiger/Callbacks, variadische
   C-Funktionen, Pointer-Arithmetik, Dereferenzierung von `rawptr`**
 - **UDP, asynchrone/Thread-Netzwerkoperationen, Threads allgemein**

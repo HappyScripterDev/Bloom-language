@@ -100,6 +100,7 @@ impl Toolchain {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn compile(
         &self,
         workdir: &Path,
@@ -107,14 +108,31 @@ impl Toolchain {
         exe_name: &str,
         links: &[LinkItem],
         extra_sources: &[String],
+        defines: &[String],
+        include_dirs: &[String],
     ) -> Result<PathBuf, String> {
         match self {
-            Toolchain::Msvc { vcvars, .. } => {
-                compile_msvc(vcvars, workdir, c_name, exe_name, links, extra_sources)
-            }
-            Toolchain::GnuLike { exe, kind } => {
-                compile_gnu(exe, *kind, workdir, c_name, exe_name, links, extra_sources)
-            }
+            Toolchain::Msvc { vcvars, .. } => compile_msvc(
+                vcvars,
+                workdir,
+                c_name,
+                exe_name,
+                links,
+                extra_sources,
+                defines,
+                include_dirs,
+            ),
+            Toolchain::GnuLike { exe, kind } => compile_gnu(
+                exe,
+                *kind,
+                workdir,
+                c_name,
+                exe_name,
+                links,
+                extra_sources,
+                defines,
+                include_dirs,
+            ),
         }
     }
 }
@@ -136,6 +154,7 @@ fn bat_arg(text: &str) -> Result<String, String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_msvc(
     vcvars: &Path,
     workdir: &Path,
@@ -143,6 +162,8 @@ fn compile_msvc(
     exe_name: &str,
     links: &[LinkItem],
     extra_sources: &[String],
+    defines: &[String],
+    include_dirs: &[String],
 ) -> Result<PathBuf, String> {
     let bat_path = workdir.join("bloom_build.bat");
     let mut link_args = String::new();
@@ -152,21 +173,25 @@ fn compile_msvc(
         link_args.push_str(&bat_arg(&arg)?);
     }
     let mut sources = String::from(c_name);
-    let mut defines = String::new();
-    if !extra_sources.is_empty() {
-        // Extra translation units are the vendored SQLite amalgamation;
-        // build it without threads, without extension loading and with
-        // double-quoted string literals disabled.
-        defines.push_str("/DSQLITE_THREADSAFE=0 /DSQLITE_OMIT_LOAD_EXTENSION /DSQLITE_DQS=0 ");
-        for source in extra_sources {
-            sources.push(' ');
-            sources.push_str(&bat_arg(source)?);
-        }
+    for source in extra_sources {
+        sources.push(' ');
+        sources.push_str(&bat_arg(source)?);
+    }
+    let mut flags = String::new();
+    for define in defines {
+        flags.push_str("/D");
+        flags.push_str(&bat_arg(define)?);
+        flags.push(' ');
+    }
+    for dir in include_dirs {
+        flags.push_str("/I");
+        flags.push_str(&bat_arg(dir)?);
+        flags.push(' ');
     }
     let bat = format!(
         "@echo off\r\ncall \"{}\" >nul 2>&1\r\ncl /nologo /std:c17 /utf-8 /O2 {}{} /Fe:{} {}\r\n",
         vcvars.display(),
-        defines,
+        flags,
         sources,
         exe_name,
         link_args
@@ -188,6 +213,7 @@ fn compile_msvc(
     Ok(exe)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_gnu(
     exe: &Path,
     kind: GnuKind,
@@ -196,15 +222,16 @@ fn compile_gnu(
     exe_name: &str,
     links: &[LinkItem],
     extra_sources: &[String],
+    defines: &[String],
+    include_dirs: &[String],
 ) -> Result<PathBuf, String> {
     let mut cmd = Command::new(exe);
     cmd.current_dir(workdir);
-    if !extra_sources.is_empty() {
-        cmd.args([
-            "-DSQLITE_THREADSAFE=0",
-            "-DSQLITE_OMIT_LOAD_EXTENSION",
-            "-DSQLITE_DQS=0",
-        ]);
+    for define in defines {
+        cmd.arg(format!("-D{}", define));
+    }
+    for dir in include_dirs {
+        cmd.arg(format!("-I{}", dir));
     }
     if kind == GnuKind::Tcc {
         cmd.args(["-o", exe_name, c_name]);

@@ -1,0 +1,76 @@
+// Benutzerkonten und Rollen in einer In-Memory-SQLite-Datenbank.
+use std::auth;
+use std::db;
+
+fn show(r: Result<bool, string>, label: string) -> void {
+    match r {
+        Result::Ok(v) => println(label + ": " + str(v)),
+        Result::Err(e) => println(label + " FEHLER: " + e)
+    };
+}
+
+fn show_id(r: Result<int, string>, label: string) -> int {
+    return match r {
+        Result::Ok(v) => id_ok(v, label),
+        Result::Err(e) => id_err(e, label)
+    };
+}
+
+fn id_ok(v: int, label: string) -> int {
+    println(label + ": " + str(v));
+    return v;
+}
+
+fn id_err(e: string, label: string) -> int {
+    println(label + " FEHLER: " + e);
+    return -1;
+}
+
+fn main() -> int {
+    match db::open_memory() {
+        Result::Ok(database) => run(database),
+        Result::Err(e) => println("DB-Fehler: " + e)
+    };
+    return 0;
+}
+
+fn run(database: db::Database) -> void {
+    show(auth::setup(database), "Schema");
+    let admin_id = show_id(auth::register_user(database, "Admin", "admin-passwort-123"), "admin anlegen");
+    let user_id = show_id(auth::register_user(database, "Benutzer", "benutzer-passwort-1"), "benutzer anlegen");
+    show_id(auth::register_user(database, "admin", "noch-ein-passwort"), "doppelt");
+
+    match auth::user_get(database, user_id) {
+        Result::Ok(u) => println("Benutzer: " + u.username + " aktiv=" + str(u.active) + " version=" + str(u.auth_version)),
+        Result::Err(e) => println("user_get: " + e)
+    };
+
+    let login = show_id(auth::authenticate(database, "BENUTZER", "benutzer-passwort-1"), "Login");
+    match auth::authenticate(database, "Benutzer", "falsch") {
+        Result::Ok(v) => println("falsches Passwort: UNERWARTET"),
+        Result::Err(e) => println("falsches Passwort: " + e)
+    };
+    match auth::authenticate(database, "gibt-es-nicht", "egal") {
+        Result::Ok(v) => println("unbekannt: UNERWARTET"),
+        Result::Err(e) => println("unbekannt: " + e)
+    };
+
+    show(auth::role_create(database, "admin"), "Rolle admin");
+    show(auth::has_role(database, admin_id, "admin"), "admin hat admin (vorher)");
+    show(auth::role_assign(database, admin_id, "admin"), "admin zuweisen");
+    show(auth::has_role(database, admin_id, "admin"), "admin hat admin (nachher)");
+    show(auth::has_role(database, login, "admin"), "benutzer hat admin");
+    match auth::roles_of(database, admin_id) {
+        Result::Ok(roles) => println("Rollen: " + join(roles, ", ")),
+        Result::Err(e) => println("roles_of: " + e)
+    };
+
+    show(auth::password_change(database, login, "neues-benutzer-passwort"), "Passwort aendern");
+    show(auth::user_disable(database, login), "deaktivieren");
+    match auth::authenticate(database, "benutzer", "neues-benutzer-passwort") {
+        Result::Ok(v) => println("deaktiviert: UNERWARTET"),
+        Result::Err(e) => println("deaktiviert: " + e)
+    };
+    show(auth::user_enable(database, login), "aktivieren");
+    show_id(auth::authenticate(database, "benutzer", "neues-benutzer-passwort"), "Login nach Aktivierung");
+}

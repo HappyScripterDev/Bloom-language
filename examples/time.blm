@@ -25,7 +25,7 @@ fn main() -> int {
         let t0 = time::monotonic_millis();
         time::sleep_ms(1);
         let t1 = time::monotonic_millis();
-        total = total + (t1 - t0);
+        total = total +(t1 - t0);
         i = i + 1;
     }
     println("monoton (Summe >= 0): " + str(total >= 0));

@@ -89,7 +89,7 @@ fn check_token(conn: int, form: web::FormData, session: web::Session) -> void {
 }
 
 fn verify(conn: int, form: web::FormData, session: web::Session, token: string) -> void {
-    if !web::csrf_check(session, token) {
+    if ! web::csrf_check(session, token) {
         error_page(conn, 403, "CSRF-Token ungueltig");
         return;
     }
@@ -142,12 +142,7 @@ fn handle(conn: int, store: web::SessionStore, request: http::HttpRequest, tmpl:
 }
 
 fn run() -> Result<int, string> {
-    let src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>CSRF</title></head>" +
-        "<body><h1>Notiz speichern</h1><p>Zaehler: {{count}}</p>" +
-        "<form method=\"post\" action=\"/save\">" +
-        "<input type=\"hidden\" name=\"csrf\" value=\"{{csrf}}\">" +
-        "<p><input name=\"note\" placeholder=\"Notiz\"></p>" +
-        "<p><button type=\"submit\">Speichern</button></p></form></body></html>";
+    let src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>CSRF</title></head>" + "<body><h1>Notiz speichern</h1><p>Zaehler: {{count}}</p>" + "<form method=\"post\" action=\"/save\">" + "<input type=\"hidden\" name=\"csrf\" value=\"{{csrf}}\">" + "<p><input name=\"note\" placeholder=\"Notiz\"></p>" + "<p><button type=\"submit\">Speichern</button></p></form></body></html>";
     let tmpl = html::template(src)?;
     let store = web::session_store(16, 600)?;
     let listener = net::tcp_listen("127.0.0.1", 0, 8)?;

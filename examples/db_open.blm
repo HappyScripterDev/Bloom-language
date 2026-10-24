@@ -6,7 +6,7 @@ use std::fs;
 fn count_rows(database: db::Database) -> Result<int, string> {
     let stmt = db::prepare(database, "SELECT count(*) FROM notes")?;
     let has_row = db::step(stmt)?;
-    if !has_row {
+    if ! has_row {
         return Result::Err("keine Zeile");
     }
     return db::column_int(stmt, 0);

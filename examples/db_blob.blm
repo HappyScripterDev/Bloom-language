@@ -28,7 +28,7 @@ fn run() -> Result<int, string> {
 fn show_blob(database: db::Database) -> Result<int, string> {
     let query = db::prepare(database, "SELECT data, length(data), hex(data) FROM blobs")?;
     let has_row = db::step(query)?;
-    if !has_row {
+    if ! has_row {
         return Result::Err("keine Zeile");
     }
     let data = db::column_bytes(query, 0)?;

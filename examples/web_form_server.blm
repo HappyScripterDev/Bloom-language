@@ -71,20 +71,8 @@ fn handle(conn: int, request: http::HttpRequest, form_tmpl: html::Template, resu
 }
 
 fn run() -> Result<int, string> {
-    let form_src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Bloom-Suche</title></head>" +
-        "<body><h1>Suche</h1>" +
-        "<form method=\"post\" action=\"/submit\">" +
-        "<p><input name=\"q\" placeholder=\"Suchbegriff\"></p>" +
-        "<p><label><input type=\"checkbox\" name=\"lang\" value=\"de\"> Deutsch</label> " +
-        "<label><input type=\"checkbox\" name=\"lang\" value=\"en\"> English</label></p>" +
-        "<p><button type=\"submit\">Suchen</button></p>" +
-        "</form></body></html>";
-    let result_src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Ergebnis</title></head>" +
-        "<body><h1>Ergebnis</h1>" +
-        "<p>Suchbegriff: {{q}}</p>" +
-        "<p>Sprachen: {{langs}}</p>" +
-        "<p>Einträge: {{count}}</p>" +
-        "<p><a href=\"/\">zurück</a></p></body></html>";
+    let form_src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Bloom-Suche</title></head>" + "<body><h1>Suche</h1>" + "<form method=\"post\" action=\"/submit\">" + "<p><input name=\"q\" placeholder=\"Suchbegriff\"></p>" + "<p><label><input type=\"checkbox\" name=\"lang\" value=\"de\"> Deutsch</label> " + "<label><input type=\"checkbox\" name=\"lang\" value=\"en\"> English</label></p>" + "<p><button type=\"submit\">Suchen</button></p>" + "</form></body></html>";
+    let result_src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Ergebnis</title></head>" + "<body><h1>Ergebnis</h1>" + "<p>Suchbegriff: {{q}}</p>" + "<p>Sprachen: {{langs}}</p>" + "<p>Einträge: {{count}}</p>" + "<p><a href=\"/\">zurück</a></p></body></html>";
     let form_tmpl = html::template(form_src)?;
     let result_tmpl = html::template(result_src)?;
 

@@ -339,6 +339,45 @@ würde der Codegen Argumente klonen, die die Runtime nur leiht).
 Getestet durch `db_api_natively`, `db_file_natively`,
 `db_web_app_e2e` und `db_examples_natively`.
 
+## Authentifizierung (`std::auth`, Argon2id)
+
+Die Argon2-Referenzimplementierung 20190702 liegt unter
+`runtime/argon2/` (CC0/Apache-2.0, `runtime/argon2_NOTICE.md`). Der
+Compiler bettet die 13 benötigten Dateien per `include_str!` ein und
+schreibt sie bei Programmen mit `std::auth` in das Build-Verzeichnis;
+die sechs C-Dateien (`argon2.c`, `core.c`, `encoding.c`, `ref.c`,
+`thread.c`, `blake2/blake2b.c`) werden als **zusätzliche
+Übersetzungseinheiten** kompiliert. Dafür hat `Toolchain::compile`
+jetzt `defines` und `include_dirs`: `ARGON2_NO_THREADS` und
+`argon2/include`. SQLite- und Argon2-Defines werden getrennt gesetzt,
+damit Programme nur das mitbekommen, was sie laden. Es gibt keine
+zusätzliche Link-Bibliothek.
+
+`bloom_auth.c` wird **nach `bloom_web.c`** emittiert (es nutzt
+Session-, JSON- und DB-Runtime) und kapselt:
+
+- PHC-Parsing und -Bauen (Standard-Base64 ohne Padding) mit
+  Parameter-Obergrenzen, bevor Argon2 aufgerufen wird,
+- Argon2id-Hashing mit eigenem 16-Byte-Salt aus
+  `bloom_web_random_bytes` (der Testhook `BLOOM_WEB_TEST_FAIL_RANDOM`
+  deckt damit auch Auth-Fehlerpfade ab),
+- das SQLite-Schema (eigene `bloom_auth_*`-Tabellen plus
+  `schema_version` in `bloom_auth_meta`) und alle Abfragen über
+  `std::db`-Prepared-Statements,
+- `login`, das erst authentifiziert und dann
+  `bloom_web_session_regenerate` aufruft,
+- `current_user` mit den Prüfungen Registrierung → Benutzer →
+  Aktivstatus → `auth_version`,
+- Rollen und den begrenzten Limiter (`Type::Limiter`, verwaltetes
+  Handle mit eigenem Retain/Release).
+
+`bloom_auth_` steht in der Borrowed-Args-Liste von
+`emit_stdlib_call`. Der Dummy-Hash für unbekannte Benutzernamen hat
+dieselben Parameter wie echte Hashes. Tests: `auth_password_natively`,
+`auth_password_random_failure_natively`, `auth_accounts_natively`,
+`auth_sessions_natively`, `auth_limiter_natively`,
+`auth_examples_natively` und `web_auth_app_e2e`.
+
 ## Formatter (`src/fmt.rs`)
 
 `bloom fmt` nutzt `lex_with_comments` (der Compiler-Pfad `lex` verwirft

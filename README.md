@@ -12,7 +12,7 @@ schreiben kann: Dateien lesen, im Netzwerk reden, JSON verarbeiten,
 HTML-Seiten ausliefern. Alles davon ist schon eingebaut und braucht
 keine externen Bibliotheken.
 
-Stand: **0.18.0**. Getestet wird auf Windows (MSVC). Linux und macOS
+Stand: **0.19.0**. Getestet wird auf Windows (MSVC). Linux und macOS
 sind im Code vorgesehen, aber ich entwickle und teste fast nur auf
 Windows.
 
@@ -78,7 +78,8 @@ fn main() -> int {
 - Standardbibliothek ohne Ballast: `std.math`, `std.fs`, `std.process`,
   `std.time`, `std.net`, `std.http` (Client und Server, mit HTTPS),
   `std.json`, `std.path`, `std.web` (Router, Formulare, Cookies, Sessions,
-  CSRF), `std.html`, `std.db` (eingebettetes SQLite).
+  CSRF), `std.html`, `std.db` (eingebettetes SQLite) und `std.auth`
+  (Argon2id, Konten, Rollen, Session-Login).
 - `bloom fmt` räumt den Quelltext auf, `bloom check` prüft ohne zu
   bauen, `bloom init` legt ein Projekt an.
 - FFI zu C und ein paar Windows-Funktionen, falls man doch mal ans
@@ -103,25 +104,35 @@ Wenn Bloom keinen C-Compiler findet, sagt es dir, was fehlt. Welchen
 es nimmt, kann man mit `BLOOM_CC` erzwingen (`set BLOOM_CC=clang`).
 Mehr dazu steht in [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
-## Was in 0.18 dazugekommen ist
+## Was in 0.19 dazugekommen ist
 
-- SQLite ist eingebaut: `std.db` mit `open`, `open_memory`, `prepare`,
-  typisierten `bind_*`-Funktionen, `step`/`execute`, Spaltenzugriff
-  nach Index und Name, Transaktionen und `busy_timeout`. Kein Server,
-  keine Installation, keine Verbindung zu irgendwas.
-- Prepared Statements sind der einzige Weg für Werte. SQL-Text wird
-  nicht in Bloom zusammengeklebt; Parameter ersetzen keine Tabellen-
-  oder Spaltennamen.
-- Strikt typisierte Spalten: INTEGER (64 Bit), REAL, TEXT (UTF-8,
-  auch mit NUL), BLOB (`fs::Bytes`, NUL-sicher) und NULL sind
-  unterscheidbar. Falsche Zieltypen sind Fehler, keine stillen
-  Konvertierungen.
-- SQLite 3.54.1 liegt als Amalgamation im Repo
-  (`runtime/sqlite3.c`, Public Domain, Hinweise in
-  `runtime/sqlite3_NOTICE.md`) und wird nur bei Programmen mit
-  `std::db` mitkompiliert.
-- `web::session_registered` sagt jetzt ausdrücklich, ob ein
-  Session-Handle noch im Store gilt (`false` nach `destroy`/Ablauf).
+- `std.auth`: Passwörter werden mit **Argon2id** gehasht (m=64 MiB,
+  t=3, p=1, Salt 16 Bytes, PHC-Format). Die Referenzimplementierung
+  liegt eingebettet im Repo (`runtime/argon2/`, CC0/Apache-2.0,
+  Hinweise in `runtime/argon2_NOTICE.md`). Bei unbekannten Benutzern
+  wird derselbe Aufwand mit einem Dummy-Hash gerechnet.
+- Konten in SQLite: `setup`, `register_user`, `authenticate`,
+  `user_find`, `user_get`, `user_disable`/`user_enable`,
+  `password_change`. Benutzernamen werden ASCII-normalisiert;
+  Duplikate verhindert ein UNIQUE-Constraint. Unbekannter Name und
+  falsches Passwort liefern dieselbe Meldung.
+- Anmeldung mit Sessions: `auth::login` rotiert die Session
+  (`web::session_regenerate`: neue ID, neuer CSRF-Token) und speichert
+  nur Benutzer-ID und `auth_version`. `auth::current_user` prüft
+  Registrierung, Aktivstatus und Version; `auth::logout` löscht die
+  serverseitige Session. Passwortwechsel und Deaktivierung machen
+  ältere Sessions sofort ungültig.
+- Rollen: `role_create`, `role_delete`, `role_assign`, `role_remove`,
+  `roles_of`, `has_role`. Kein Standard-Admin, keine automatischen
+  Rechte; eine Session allein ist keine Berechtigung.
+- Login-Limiter: `auth::limiter` mit fester Fenstergröße, begrenzter
+  Eintragszahl und dokumentierter Verdrängung. Pro Prozess, kein
+  verteilter Schutz.
+- Behoben: `web::delete_cookie` sendet jetzt wirklich `Max-Age=0`
+  (vorher wurde das Attribut weggelassen).
+- Beispiele: `auth_password`, `auth_users`, `auth_sessions`,
+  `auth_limiter`, `web_auth_app` (vollständige Anmeldung mit
+  Registrierung, Login, Rollen, Logout und Passwortwechsel).
 
 ## Was (noch) nicht geht
 
@@ -131,7 +142,10 @@ Damit hier keine falschen Erwartungen entstehen:
 - Keine Vererbung, keine Interfaces, keine Makros.
 - Kein Paketmanager, kein Language Server, kein Debugger.
 - Kein HTTP/2, keine WebSockets, kein UDP.
-- TLS gibt es nur als Client unter Windows.
+- TLS gibt es nur als Client unter Windows; einen HTTPS-Server gibt es
+  nicht (TLS-Terminierung davor).
+- Kein OAuth/OIDC, keine MFA, keine E-Mail-Verifikation, kein
+  Passwort-Reset per E-Mail, kein JWT.
 - Die Sprache ist 0.x. Ich ändere APIs auch mal, wenn es sein muss.
 
 ## Doku
@@ -150,7 +164,7 @@ Damit hier keine falschen Erwartungen entstehen:
 ## Selbst entwickeln
 
 ```bash
-cargo test                    # 508 Tests: Unit + echte kompilierte Programme
+cargo test                    # 516 Tests: Unit + echte kompilierte Programme
 cargo clippy --all-targets
 cargo fmt
 ```
@@ -169,6 +183,7 @@ bloom run examples/form_parse.blm
 bloom run examples/web_form_server.blm
 bloom run examples/web_cookies.blm
 bloom run examples/db_prepared.blm
+bloom run examples/auth_password.blm
 bloom run examples/web_csrf_form.blm
 ```
 
@@ -179,3 +194,7 @@ MIT. Mach damit, was du willst.
 Die eingebettete SQLite-Amalgamation (`runtime/sqlite3.c`/`.h`) ist
 Public Domain. Version, Quelle und Prüfsumme stehen in
 [runtime/sqlite3_NOTICE.md](runtime/sqlite3_NOTICE.md).
+
+Die eingebettete Argon2-Referenzimplementierung (`runtime/argon2/`)
+steht unter CC0 1.0 oder Apache 2.0 (nach Wahl). Die Lizenztexte und
+Hinweise stehen in [runtime/argon2_NOTICE.md](runtime/argon2_NOTICE.md).

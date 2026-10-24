@@ -520,6 +520,57 @@ Vertagt (weiterhin geplant):
 - GUI-Anbindung (aufbauend auf `std::win32`)
 - WebSocket, JSON-Streaming
 
+## Version 0.19.0 – Authentifizierung und Autorisierung (implementiert)
+
+- **Argon2id** (Referenzimplementierung 20190702, CC0/Apache-2.0,
+  eingebettet unter `runtime/argon2/`): `password_hash`,
+  `password_verify`, `password_needs_rehash`. Parameter m=64 MiB, t=3,
+  p=1, Salt 16 Bytes, Tag 32 Bytes, PHC-Format. Verifikation prüft den
+  Hashstring vorab (nur Argon2id v19, m≤256 MiB, t≤10, p≤4); gemessen
+  ca. 115–120 ms pro Hash auf einem Ryzen 7 5800X (Windows 11, MSVC).
+- **Konten in SQLite:** eigenes Schema mit Metatabelle/Version 1,
+  `setup` idempotent und transaktional, unbekannte/fremde Schemata
+  werden abgelehnt. `register_user`, `authenticate`, `user_find`,
+  `user_get`, `user_disable`/`user_enable`, `password_change`.
+  Normalisierte ASCII-Benutzernamen mit UNIQUE-Constraint; unbekannter
+  Name und falsches Passwort liefern dieselbe Meldung (mit
+  Dummy-Argon2-Aufwand).
+- **Login-Sessions:** `web::session_regenerate` (neue ID, neuer
+  CSRF-Token, gleiche Daten/Expiry), `auth::login` rotiert nach
+  erfolgreicher Verifikation; Sessiondaten enthalten nur Benutzer-ID
+  und `auth_version`; `current_user` prüft Registrierung, Konto,
+  Aktivstatus und Version; `logout` zerstört die Serversession.
+  Passwortwechsel/Deaktivierung erhöhen `auth_version` und machen
+  ältere Sessions ungültig.
+- **Rollen:** `role_create` (idempotent), `role_delete`, `role_assign`,
+  `role_remove`, `roles_of`, `has_role`; kein Standard-Admin,
+  unbekannte Rollen sind keine Freigabe.
+- **Login-Limiter:** festes Zeitfenster, monotone Uhr, begrenzte
+  Eintragszahl (Verdrängung des ältesten Fensters), explizite
+  Schlüssel, pro Prozess.
+- **Bugfix:** `web::delete_cookie` sendet jetzt `Max-Age=0` (vorher
+  fehlte das Attribut); Regressionstest angepasst.
+- **Beispiele:** `auth_password`, `auth_users`, `auth_sessions`,
+  `auth_limiter`, `web_auth_app` (vollständige Anmeldung mit
+  Registrierung, Login, Rollen, Admin-Bereich, Logout,
+  Passwortwechsel und Deaktivierung)
+- 516 Tests (323 Unit + 193 E2E), darunter Argon2-KAT-Vektor,
+  Hash-Grenzen, Schema-Fehler, SQL-Injection-Versuche, Session-Rotation,
+  Invalidierung, CSRF-Pflicht bei Login/Logout/Passwortwechsel,
+  Limiter-Grenzen und ein vollständiger HTTP-E2E mit Bloom-Client
+
+Vertagt (weiterhin geplant):
+
+- OAuth/OIDC, externe Login-Anbieter, MFA/Passkeys,
+  E-Mail-Verifikation, Passwort-Reset per E-Mail, JWT als
+  Session-Ersatz, verteilte Session-Stores, ABAC/Policy-Sprachen,
+  automatische Rollenvererbung, Admin-Dashboard
+- PostgreSQL/MySQL, ORMs, Schema-Migrationen, Connection-Pools
+- Streaming/Range-Requests, ETag/Last-Modified, automatisches Neuladen
+- Template-Includes, Makros, ausführbare Ausdrücke, Raw-HTML
+- GUI-Anbindung (aufbauend auf `std::win32`)
+- WebSocket, JSON-Streaming
+
 ## Version 1.0.0+ – Ökosystem (geplant)
 
 - Paketmanager, Language Server (LSP), Debug-Informationen

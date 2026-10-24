@@ -114,6 +114,8 @@ pub enum Type {
     Db,
     /// Internal handle to a prepared SQLite statement (`std::db::Statement`).
     Stmt,
+    /// Internal handle to a login rate limiter (`std::auth::Limiter`).
+    Limiter,
 }
 
 impl Type {
@@ -186,6 +188,7 @@ pub fn mangle_type(ty: &Type) -> String {
         Type::Session => "session".to_string(),
         Type::Db => "db".to_string(),
         Type::Stmt => "stmt".to_string(),
+        Type::Limiter => "auth_limiter".to_string(),
         Type::Param(name) => c_ident(name),
     }
 }
@@ -212,6 +215,7 @@ impl fmt::Display for Type {
             Type::Session => write!(f, "std::web::Session"),
             Type::Db => write!(f, "std::db::Database"),
             Type::Stmt => write!(f, "std::db::Statement"),
+            Type::Limiter => write!(f, "std::auth::Limiter"),
             Type::Struct(name, args) => {
                 if args.is_empty() {
                     write!(f, "{}", name)
@@ -254,6 +258,12 @@ mod tests {
         assert_eq!(Type::Stmt.to_string(), "std::db::Statement");
         assert_eq!(mangle_type(&Type::Db), "db");
         assert_eq!(mangle_type(&Type::Stmt), "stmt");
+    }
+
+    #[test]
+    fn limiter_type_is_displayed_and_mangled() {
+        assert_eq!(Type::Limiter.to_string(), "std::auth::Limiter");
+        assert_eq!(mangle_type(&Type::Limiter), "auth_limiter");
     }
 
     #[test]

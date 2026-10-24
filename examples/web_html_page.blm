@@ -90,10 +90,7 @@ fn parse_failed(e: string) -> int {
 }
 
 fn main() -> int {
-    let src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{title}}</title></head>" +
-        "<body><h1>{{title}}</h1>" +
-        "{{#if active}}<ul>{{#each users}}<li>{{this.name}} ({{this.role}})</li>{{/each}}</ul>{{/if}}" +
-        "</body></html>";
+    let src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{title}}</title></head>" + "<body><h1>{{title}}</h1>" + "{{#if active}}<ul>{{#each users}}<li>{{this.name}} ({{this.role}})</li>{{/each}}</ul>{{/if}}" + "</body></html>";
     let code = match html::template(src) {
         Result::Ok(tmpl) => run(tmpl),
         Result::Err(e) => parse_failed(e)

@@ -237,6 +237,15 @@ oder Ausführen geben die beteiligten Teilressourcen sofort frei;
 abgelehnte SQL-Texte (mehrere Anweisungen, NUL-Bytes) finalisieren das
 bereits erzeugte Statement. Alle DB-Tests prüfen
 `live allocations: 0`.
+
+**Der Login-Limiter (`std::auth::Limiter`, `Type::Limiter`) ist ein
+verwaltetes Handle** auf eine Tabelle fester Kapazität. Kopieren
+retained, das Scope-Ende gibt alle Schlüssel-Strings und die Tabelle
+frei. Abgelaufene Einträge werden bei jedem Zugriff entfernt; ist die
+Tabelle voll, wird der älteste Fenstereintrag ersetzt, sodass die
+Speichernutzung beschränkt bleibt. Fehler bei `limiter_check` (leerer
+oder zu langer Schlüssel) verändern nichts. Alle Auth-Tests prüfen
+`live allocations: 0`.
 Alle Stdlib-Tests
 laufen unter `BLOOM_MEM_REPORT=1`. Getestet wird nativ mit MSVC
 (Windows). Valgrind/ASan sind auf dieser Toolchain nicht verfügbar und

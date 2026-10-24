@@ -53,9 +53,7 @@ fn print_document(doc: json::JsonValue) -> void {
 }
 
 fn main() -> int {
-    let text = "{\"name\": \"Ada\", \"age\": 36, \"active\": true, " +
-        "\"address\": {\"city\": \"London\", \"zip\": \"N1\"}, " +
-        "\"tags\": [\"math\", \"code\"]}";
+    let text = "{\"name\": \"Ada\", \"age\": 36, \"active\": true, " + "\"address\": {\"city\": \"London\", \"zip\": \"N1\"}, " + "\"tags\": [\"math\", \"code\"]}";
     match json::parse(text) {
         Result::Ok(doc) => print_document(doc),
         Result::Err(e) => println("FEHLER: " + e)

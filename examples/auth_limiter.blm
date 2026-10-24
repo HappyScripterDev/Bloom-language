@@ -1,0 +1,32 @@
+// Begrenzter Login-Limiter: feste Fenster, begrenzte Eintraege, Reset.
+use std::auth;
+use std::time;
+
+fn main() -> int {
+    match auth::limiter(3, 1, 3) {
+        Result::Ok(limiter) => run(limiter),
+        Result::Err(e) => println("Limiter-Fehler: " + e)
+    };
+    return 0;
+}
+
+fn run(limiter: auth::Limiter) -> void {
+    var i = 0;
+    while i < 4 {
+        match auth::limiter_check(limiter, "ada") {
+            Result::Ok(v) => println("Versuch " + str(i + 1) + ": erlaubt=" + str(v)),
+            Result::Err(e) => println("Fehler: " + e)
+        };
+        i = i + 1;
+    }
+    println("Eintraege: " + str(auth::limiter_count(limiter)));
+    println("Reset: " + str(auth::limiter_reset(limiter, "ada")));
+    println("Eintraege nach Reset: " + str(auth::limiter_count(limiter)));
+    time::sleep_ms(1100);
+    match auth::limiter_check(limiter, "ada") {
+        Result::Ok(v) => println("nach Fenster: erlaubt=" + str(v)),
+        Result::Err(e) => println("Fehler: " + e)
+    };
+    println("alte Eintraege entfernt: " + str(auth::limiter_expire(limiter)));
+    println("Konten-Schluessel statt IP: ada, bob, carol sind explizit");
+}

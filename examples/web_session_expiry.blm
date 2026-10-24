@@ -53,9 +53,7 @@ fn handle(conn: int, store: web::SessionStore, request: http::HttpRequest, tmpl:
 }
 
 fn run() -> Result<int, string> {
-    let src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Session-Ablauf</title></head>" +
-        "<body><h1>Session-Ablauf</h1><p>Zustand: {{state}}</p>" +
-        "<p>Lebensdauer: {{ttl}} Sekunde(n)</p></body></html>";
+    let src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Session-Ablauf</title></head>" + "<body><h1>Session-Ablauf</h1><p>Zustand: {{state}}</p>" + "<p>Lebensdauer: {{ttl}} Sekunde(n)</p></body></html>";
     let tmpl = html::template(src)?;
     let store = web::session_store(8, 1)?;
     let listener = net::tcp_listen("127.0.0.1", 0, 8)?;

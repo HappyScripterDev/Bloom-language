@@ -7615,11 +7615,11 @@ fn main() -> int {
         "{stdout}"
     );
     assert!(
-        stdout.contains("D|Set-Cookie: sid=; Path=/; HttpOnly; Secure; SameSite=Lax\n"),
+        stdout.contains("D|Set-Cookie: sid=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax\n"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("D|Set-Cookie: sid=; Path=/app; HttpOnly; SameSite=Lax\n"),
+        stdout.contains("D|Set-Cookie: sid=; Path=/app; Max-Age=0; HttpOnly; SameSite=Lax\n"),
         "{stdout}"
     );
     assert!(stdout.contains("B|len="), "{stdout}");
@@ -9274,6 +9274,1140 @@ fn wait_expiry(store: web::SessionStore, session: web::Session) -> void {
         out.stderr.contains("live allocations: 0"),
         "{}",
         out.combined()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn auth_password_natively() {
+    let dir = temp_dir("auth-password");
+    let src = r#"use std::auth;
+
+fn show_text(r: Result<string, string>, label: string) -> void {
+    match r {
+        Result::Ok(v) => println(label + "=ok:" + v),
+        Result::Err(e) => println(label + "=err:" + e)
+    };
+}
+
+fn show_bool(r: Result<bool, string>, label: string) -> void {
+    match r {
+        Result::Ok(v) => println(label + "=" + str(v)),
+        Result::Err(e) => println(label + "=err:" + e)
+    };
+}
+fn hash_case(password: string, label: string) -> string {
+    return match auth::password_hash(password) {
+        Result::Ok(hash) => hashed(hash, label),
+        Result::Err(e) => hash_failed(e, label)
+    };
+}
+
+fn hashed(hash: string, label: string) -> string {
+    println(label + "-len=" + str(len(hash)));
+    return hash;
+}
+
+fn hash_failed(e: string, label: string) -> string {
+    println(label + "-err=" + e);
+    return "";
+}
+fn main() -> int {
+    let first = hash_case("korrekt horse battery staple", "hash1");
+    let second = hash_case("korrekt horse battery staple", "hash2");
+    println("different=" + str(first != second));
+    show_bool(auth::password_verify("korrekt horse battery staple", first), "verify-ok");
+    show_bool(auth::password_verify("falsch", first), "verify-bad");
+    show_bool(auth::password_verify("", first), "verify-empty");
+    show_bool(auth::password_needs_rehash(first), "needs-rehash");
+    println("prefix=" + str(starts_with(first, "$argon2id$v=19$m=65536,t=3,p=1$")));
+
+    let vector = "$argon2id$v=19$m=65536,t=2,p=1$c29tZXNhbHQ$CTFhFdXPJO1aFaMaO6Mm5c8y7cJHAph8ArZWb2GRPPc";
+    show_bool(auth::password_verify("password", vector), "kat-ok");
+    show_bool(auth::password_verify("wrong", vector), "kat-bad");
+    show_bool(auth::password_needs_rehash(vector), "kat-rehash");
+
+    show_bool(auth::password_verify("x", "$argon2id$v=19$m=999999999,t=3,p=1$AAAA$AAAA"), "huge-m");
+    show_bool(auth::password_verify("x", "$argon2id$v=19$m=65536,t=99,p=1$AAAA$AAAA"), "huge-t");
+    show_bool(auth::password_verify("x", "$argon2i$v=19$m=65536,t=3,p=1$AAAA$AAAA"), "wrong-alg");
+    show_bool(auth::password_verify("x", "kaputt"), "garbage");
+    show_bool(auth::password_verify("x", ""), "empty-hash");
+    show_text(auth::password_hash("1234567"), "short");
+    show_text(auth::password_hash(""), "empty-pw");
+    show_text(auth::password_hash("12345678"), "min-ok");
+    show_bool(auth::password_verify("x", ""), "empty-verify");
+    return 0;
+}
+"#;
+    let file = dir.join("main.blm");
+    write_file(&file, src);
+    let out = run_bloom_env(
+        &["run", file.to_string_lossy().as_ref()],
+        &[("BLOOM_MEM_REPORT", "1")],
+    );
+    if no_toolchain(&out) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(out.code, 0, "{}", out.combined());
+    let stdout = norm(&out.stdout);
+    assert!(stdout.contains("hash1-len=97"), "{stdout}");
+    assert!(stdout.contains("hash2-len=97"), "{stdout}");
+    assert!(stdout.contains("different=true"), "{stdout}");
+    assert!(stdout.contains("verify-ok=true"), "{stdout}");
+    assert!(stdout.contains("verify-bad=false"), "{stdout}");
+    assert!(stdout.contains("verify-empty=false"), "{stdout}");
+    assert!(stdout.contains("needs-rehash=false"), "{stdout}");
+    assert!(stdout.contains("prefix=true"), "{stdout}");
+    assert!(stdout.contains("kat-ok=true"), "{stdout}");
+    assert!(stdout.contains("kat-bad=false"), "{stdout}");
+    assert!(stdout.contains("kat-rehash=true"), "{stdout}");
+    assert!(
+        stdout.contains("huge-m=err:password_verify: invalid or unsupported password hash"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("huge-t=err:password_verify: invalid or unsupported password hash"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("wrong-alg=err:password_verify: invalid or unsupported password hash"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("garbage=err:password_verify: invalid or unsupported password hash"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("empty-hash=err:"), "{stdout}");
+    assert!(
+        stdout.contains("short=err:password_hash: password must be at least 8 bytes"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("empty-pw=err:"), "{stdout}");
+    assert!(stdout.contains("min-ok=ok:$argon2id$v=19$"), "{stdout}");
+    assert!(
+        out.stderr.contains("live allocations: 0"),
+        "{}",
+        out.combined()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn auth_password_random_failure_natively() {
+    let dir = temp_dir("auth-password-random");
+    let src = r#"use std::auth;
+
+fn main() -> int {
+    match auth::password_hash("irgendein-passwort") {
+        Result::Ok(v) => println("UNEXPECTED"),
+        Result::Err(e) => println("ERR|" + e)
+    };
+    return 0;
+}
+"#;
+    let file = dir.join("main.blm");
+    write_file(&file, src);
+    let out = run_bloom_env(
+        &["run", file.to_string_lossy().as_ref()],
+        &[
+            ("BLOOM_MEM_REPORT", "1"),
+            ("BLOOM_WEB_TEST_FAIL_RANDOM", "1"),
+        ],
+    );
+    if no_toolchain(&out) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(out.code, 0, "{}", out.combined());
+    let stdout = norm(&out.stdout);
+    assert!(
+        stdout.contains("ERR|password_hash: secure random source unavailable"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("UNEXPECTED"), "{stdout}");
+    assert!(
+        out.stderr.contains("live allocations: 0"),
+        "{}",
+        out.combined()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn auth_accounts_natively() {
+    let dir = temp_dir("auth-accounts");
+    let src = r#"use std::auth;
+use std::db;
+
+fn show_bool(r: Result<bool, string>, label: string) -> void {
+    match r {
+        Result::Ok(v) => println(label + "=" + str(v)),
+        Result::Err(e) => println(label + "=err:" + e)
+    };
+}
+
+fn show_int(r: Result<int, string>, label: string) -> void {
+    match r {
+        Result::Ok(v) => println(label + "=" + str(v)),
+        Result::Err(e) => println(label + "=err:" + e)
+    };
+}
+
+fn id_of(r: Result<int, string>) -> int {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => -1
+    };
+}
+
+
+fn show_user_err(r: Result<auth::UserInfo, string>, label: string) -> void {
+    match r {
+        Result::Ok(u) => println(label + "=ok"),
+        Result::Err(e) => println(label + "=err:" + e)
+    };
+}
+fn main() -> int {
+    match db::open_memory() {
+        Result::Ok(database) => run(database),
+        Result::Err(e) => println("db-err: " + e)
+    };
+    schema_cases();
+    return 0;
+}
+
+fn run(database: db::Database) -> void {
+    show_bool(auth::setup(database), "setup");
+    show_bool(auth::setup(database), "setup-again");
+    let admin = id_of(auth::register_user(database, "  Admin ", "admin-passwort-123"));
+    let ada = id_of(auth::register_user(database, "Ada.Lovelace", "ada-passwort-123"));
+    println("ids=" + str(admin) + "," + str(ada));
+    show_int(auth::register_user(database, "ADMIN", "anders-passwort-1"), "dup-case");
+    show_int(auth::register_user(database, "ab", "kurz-passwort-1"), "too-short-name");
+    show_int(auth::register_user(database, "a b", "kurz-passwort-1"), "space-name");
+    show_int(auth::register_user(database, "a; DROP TABLE bloom_auth_users; --", "irgendein-passwort"), "injection-name");
+    show_int(auth::register_user(database, "injection2", "abc'; DROP TABLE x; --"), "injection-password");
+
+    show_int(auth::authenticate(database, " ADMIN ", "admin-passwort-123"), "login");
+    show_int(auth::authenticate(database, "admin", "falsch"), "login-bad");
+    show_int(auth::authenticate(database, "niemand", "egal"), "login-unknown");
+    show_int(auth::authenticate(database, "a; DROP TABLE bloom_auth_users; --", "egal"), "login-injection");
+
+    match auth::user_get(database, ada) {
+        Result::Ok(u) => println("user=" + u.username + "|" + u.display_name + "|" + str(u.active) + "|" + str(u.auth_version)),
+        Result::Err(e) => println("user-err: " + e)
+    };
+    show_user_err(auth::user_get(database, 999), "user-missing");
+    show_int(auth::user_find(database, "ADA.lovelace"), "find");
+    show_int(auth::user_find(database, "gibt-es-nicht"), "find-missing");
+
+    show_bool(auth::role_create(database, "Admin"), "role-create");
+    show_bool(auth::role_create(database, "admin"), "role-create-again");
+    show_bool(auth::has_role(database, admin, "admin"), "has-before");
+    show_bool(auth::role_assign(database, admin, "admin"), "assign");
+    show_bool(auth::role_assign(database, admin, "admin"), "assign-again");
+    show_bool(auth::has_role(database, admin, "admin"), "has-after");
+    show_bool(auth::has_role(database, ada, "admin"), "has-other");
+    show_bool(auth::has_role(database, admin, "root"), "has-unknown-role");
+    show_bool(auth::role_assign(database, admin, "root"), "assign-unknown-role");
+    show_bool(auth::role_assign(database, 999, "admin"), "assign-unknown-user");
+    show_bool(auth::role_remove(database, admin, "admin"), "remove");
+    show_bool(auth::has_role(database, admin, "admin"), "has-removed");
+    show_bool(auth::role_delete(database, "admin"), "role-delete");
+    show_bool(auth::role_delete(database, "admin"), "role-delete-again");
+
+    show_bool(auth::password_change(database, ada, "neues-ada-passwort"), "password-change");
+    show_int(auth::authenticate(database, "ada.lovelace", "ada-passwort-123"), "old-password");
+    show_int(auth::authenticate(database, "ada.lovelace", "neues-ada-passwort"), "new-password");
+    show_bool(auth::user_disable(database, ada), "disable");
+    show_int(auth::authenticate(database, "ada.lovelace", "neues-ada-passwort"), "disabled-login");
+    show_bool(auth::user_enable(database, ada), "enable");
+    show_int(auth::authenticate(database, "ada.lovelace", "neues-ada-passwort"), "enabled-login");
+    show_bool(auth::user_disable(database, 999), "disable-missing");
+    show_bool(auth::password_change(database, 999, "irgendein-passwort"), "change-missing");
+}
+
+fn schema_cases() -> void {
+    match db::open_memory() {
+        Result::Ok(database) => version_case(database),
+        Result::Err(e) => println("db2-err: " + e)
+    };
+    match db::open_memory() {
+        Result::Ok(database) => foreign_case(database),
+        Result::Err(e) => println("db3-err: " + e)
+    };
+}
+
+fn exec(database: db::Database, sql: string) -> void {
+    match db::prepare(database, sql) {
+        Result::Ok(stmt) => match db::execute(stmt) {
+            Result::Ok(v) => println("exec=" + str(v)),
+            Result::Err(e) => println("exec-err: " + e)
+        },
+        Result::Err(e) => println("prep-err: " + e)
+    };
+}
+
+fn version_case(database: db::Database) -> void {
+    exec(database, "CREATE TABLE bloom_auth_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    exec(database, "INSERT INTO bloom_auth_meta VALUES ('schema_version', '9')");
+    show_bool(auth::setup(database), "version-setup");
+}
+
+fn foreign_case(database: db::Database) -> void {
+    exec(database, "CREATE TABLE bloom_auth_users (id INTEGER PRIMARY KEY)");
+    show_bool(auth::setup(database), "foreign-setup");
+}
+"#;
+    let file = dir.join("main.blm");
+    write_file(&file, src);
+    let out = run_bloom_env(
+        &["run", file.to_string_lossy().as_ref()],
+        &[("BLOOM_MEM_REPORT", "1")],
+    );
+    if no_toolchain(&out) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(out.code, 0, "{}", out.combined());
+    let stdout = norm(&out.stdout);
+    assert!(stdout.contains("setup=true\nsetup-again=true"), "{stdout}");
+    assert!(stdout.contains("ids=1,2"), "{stdout}");
+    assert!(
+        stdout.contains("dup-case=err:register_user: username is already taken"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("too-short-name=err:register_user: invalid username"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("space-name=err:register_user: invalid username"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("injection-name=err:register_user: invalid username"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("injection-password=3"),
+        "password is data, not SQL: {stdout}"
+    );
+    assert!(stdout.contains("login=1\n"), "{stdout}");
+    assert!(
+        stdout.contains("login-bad=err:authenticate: invalid credentials"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("login-unknown=err:authenticate: invalid credentials"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("login-injection=err:authenticate: invalid credentials"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("user=ada.lovelace|Ada.Lovelace|true|1"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("user-missing=err:user_get: user not found"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("find=2\n"), "{stdout}");
+    assert!(
+        stdout.contains("find-missing=err:user_find: user not found"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("role-create=true\nrole-create-again=false"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("has-before=false\nassign=true\nassign-again=false\nhas-after=true"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("has-other=false"), "{stdout}");
+    assert!(stdout.contains("has-unknown-role=false"), "{stdout}");
+    assert!(
+        stdout.contains("assign-unknown-role=err:role_assign: unknown role"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("assign-unknown-user=err:role_assign: unknown user"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("remove=true\nhas-removed=false"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("role-delete=true\nrole-delete-again=false"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("password-change=true"), "{stdout}");
+    assert!(
+        stdout.contains("old-password=err:authenticate: invalid credentials"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("new-password=2\n"), "{stdout}");
+    assert!(stdout.contains("disable=true"), "{stdout}");
+    assert!(
+        stdout.contains("disabled-login=err:authenticate: invalid credentials"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("enable=true"), "{stdout}");
+    assert!(stdout.contains("enabled-login=2\n"), "{stdout}");
+    assert!(
+        stdout.contains("disable-missing=err:user_disable: user not found"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("change-missing=err:password_change: user not found"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("version-setup=err:setup: unsupported auth schema version (expected 1)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout
+            .contains("foreign-setup=err:setup: existing auth tables are not managed by std::auth"),
+        "{stdout}"
+    );
+    assert!(
+        out.stderr.contains("live allocations: 0"),
+        "{}",
+        out.combined()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn auth_sessions_natively() {
+    let dir = temp_dir("auth-sessions");
+    let src = r#"use std::auth;
+use std::db;
+use std::web;
+use std::http;
+use std::json;
+use std::time;
+
+fn make(headers: string) -> http::HttpRequest {
+    return http::HttpRequest { method: "GET", target: "/", version: "HTTP/1.1", headers: headers, body: "" };
+}
+
+fn load(store: web::SessionStore, header: string) -> string {
+    return match web::cookies(make(header)) {
+        Result::Ok(cookies) => load2(store, cookies),
+        Result::Err(e) => "cookies-error"
+    };
+}
+
+fn load2(store: web::SessionStore, cookies: web::Cookies) -> string {
+    return match web::session_load(store, cookies, "sid") {
+        Result::Ok(session) => "ok",
+        Result::Err(e) => "err"
+    };
+}
+
+fn current(store: web::SessionStore, database: db::Database, session: web::Session) -> string {
+    return match auth::current_user(database, store, session) {
+        Result::Ok(opt) => user_text(opt),
+        Result::Err(e) => "error"
+    };
+}
+
+fn user_text(opt: Option<auth::UserInfo>) -> string {
+    return match opt {
+        Option::Some(u) => "user:" + u.username,
+        Option::None => "none"
+    };
+}
+
+fn set_marker(session: web::Session) -> void {
+    json::set(web::session_data(session), "marker", json::make_string("bleibt"));
+}
+
+fn main() -> int {
+    match db::open_memory() {
+        Result::Ok(database) => run(database),
+        Result::Err(e) => println("db-err: " + e)
+    };
+    return 0;
+}
+
+fn run(database: db::Database) -> void {
+    auth::setup(database);
+    let uid = register(database);
+    match web::session_store(8, 60) {
+        Result::Ok(store) => rotate_case(database, store, uid),
+        Result::Err(e) => println("store-err: " + e)
+    };
+    match web::session_store(4, 1) {
+        Result::Ok(store) => expiry_case(database, store),
+        Result::Err(e) => println("store-err: " + e)
+    };
+}
+
+fn register(database: db::Database) -> int {
+    return match auth::register_user(database, "ada", "erstes-passwort") {
+        Result::Ok(v) => v,
+        Result::Err(e) => -1
+    };
+}
+
+fn rotate_case(database: db::Database, store: web::SessionStore, uid: int) -> void {
+    match web::session_new(store) {
+        Result::Ok(anonymous) => direct_rotate(database, store, uid, anonymous),
+        Result::Err(e) => println("session-err: " + e)
+    };
+}
+
+fn direct_rotate(database: db::Database, store: web::SessionStore, uid: int, anonymous: web::Session) -> void {
+    set_marker(anonymous);
+    let old_id = web::session_id(anonymous);
+    let old_token = token_of(anonymous);
+    match web::session_regenerate(store, anonymous) {
+        Result::Ok(fresh) => regenerated(database, store, uid, anonymous, fresh, old_id, old_token),
+        Result::Err(e) => println("regen-err: " + e)
+    };
+}
+
+fn regenerated(database: db::Database, store: web::SessionStore, uid: int, anonymous: web::Session, fresh: web::Session, old_id: string, old_token: string) -> void {
+    println("regen-diff=" + str(web::session_id(fresh) != old_id));
+    println("regen-token=" + str(token_of(fresh) != old_token));
+    println("regen-old-registered=" + str(web::session_registered(store, anonymous)));
+    println("regen-old-load=" + load(store, "Cookie: sid=" + old_id));
+    println("regen-new-load=" + load(store, "Cookie: sid=" + web::session_id(fresh)));
+    println("regen-marker=" + marker_of(fresh));
+    login_case(database, store, uid);
+}
+
+fn marker_of(session: web::Session) -> string {
+    return match json::get_string(web::session_data(session), "marker") {
+        Result::Ok(v) => v,
+        Result::Err(e) => "missing"
+    };
+}
+
+fn token_of(session: web::Session) -> string {
+    return match web::csrf_token(session) {
+        Result::Ok(v) => v,
+        Result::Err(e) => ""
+    };
+}
+
+fn login_case(database: db::Database, store: web::SessionStore, uid: int) -> void {
+    match web::session_new(store) {
+        Result::Ok(anonymous) => do_login(database, store, uid, anonymous),
+        Result::Err(e) => println("session-err: " + e)
+    };
+}
+
+fn do_login(database: db::Database, store: web::SessionStore, uid: int, anonymous: web::Session) -> void {
+    let old_id = web::session_id(anonymous);
+    match auth::login(store, anonymous, database, "ada", "erstes-passwort") {
+        Result::Ok(session) => logged_in(database, store, uid, session, old_id),
+        Result::Err(e) => println("login-err: " + e)
+    };
+}
+
+fn logged_in(database: db::Database, store: web::SessionStore, uid: int, session: web::Session, old_id: string) -> void {
+    println("login-old-load=" + load(store, "Cookie: sid=" + old_id));
+    println("login-user=" + current(store, database, session));
+    println("no-password-in-data=" + str(!contains(session_dump(session), "argon2id")));
+    match auth::password_change(database, uid, "zweites-passwort") {
+        Result::Ok(_) => println("pw-change=true"),
+        Result::Err(e) => println("pw-change-err: " + e)
+    };
+    println("after-pw=" + current(store, database, session));
+    match auth::login(store, session, database, "ada", "zweites-passwort") {
+        Result::Ok(fresh) => after_relogin(database, store, uid, fresh),
+        Result::Err(e) => println("relogin-err: " + e)
+    };
+}
+
+fn logout_ok(store: web::SessionStore, session: web::Session) -> bool {
+    return match auth::logout(store, session) {
+        Result::Ok(v) => v,
+        Result::Err(e) => false
+    };
+}
+
+fn session_dump(session: web::Session) -> string {
+    return match json::stringify(web::session_data(session)) {
+        Result::Ok(v) => v,
+        Result::Err(e) => ""
+    };
+}
+
+fn after_relogin(database: db::Database, store: web::SessionStore, uid: int, fresh: web::Session) -> void {
+    println("relogin=" + current(store, database, fresh));
+    match auth::user_disable(database, uid) {
+        Result::Ok(_) => println("disable=true"),
+        Result::Err(e) => println("disable-err: " + e)
+    };
+    println("after-disable=" + current(store, database, fresh));
+    match auth::authenticate(database, "ada", "zweites-passwort") {
+        Result::Ok(v) => println("auth-disabled=UNEXPECTED"),
+        Result::Err(e) => println("auth-disabled=invalid")
+    };
+    let sid = web::session_id(fresh);
+    println("logout=" + str(logout_ok(store, fresh)));
+    println("after-logout=" + current(store, database, fresh));
+    println("logout-load=" + load(store, "Cookie: sid=" + sid));
+    auth::user_enable(database, uid);
+}
+
+fn expiry_case(database: db::Database, store: web::SessionStore) -> void {
+    match web::session_new(store) {
+        Result::Ok(anonymous) => expiry_login(database, store, anonymous),
+        Result::Err(e) => println("expiry-session-err: " + e)
+    };
+}
+
+fn expiry_login(database: db::Database, store: web::SessionStore, anonymous: web::Session) -> void {
+    match auth::login(store, anonymous, database, "ada", "zweites-passwort") {
+        Result::Ok(session) => run_expiry(database, store, session),
+        Result::Err(e) => println("expiry-login-err: " + e)
+    };
+}
+
+fn run_expiry(database: db::Database, store: web::SessionStore, session: web::Session) -> void {
+    let sid = web::session_id(session);
+    time::sleep_ms(1200);
+    println("expired-load=" + load(store, "Cookie: sid=" + sid));
+    println("expired-user=" + current(store, database, session));
+}
+"#;
+    let file = dir.join("main.blm");
+    write_file(&file, src);
+    let out = run_bloom_env(
+        &["run", file.to_string_lossy().as_ref()],
+        &[("BLOOM_MEM_REPORT", "1")],
+    );
+    if no_toolchain(&out) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(out.code, 0, "{}", out.combined());
+    let stdout = norm(&out.stdout);
+    assert!(stdout.contains("regen-diff=true"), "{stdout}");
+    assert!(stdout.contains("regen-token=true"), "{stdout}");
+    assert!(stdout.contains("regen-old-registered=false"), "{stdout}");
+    assert!(stdout.contains("regen-old-load=err"), "{stdout}");
+    assert!(stdout.contains("regen-new-load=ok"), "{stdout}");
+    assert!(stdout.contains("regen-marker=bleibt"), "{stdout}");
+    assert!(stdout.contains("login-old-load=err"), "{stdout}");
+    assert!(stdout.contains("login-user=user:ada"), "{stdout}");
+    assert!(stdout.contains("no-password-in-data=true"), "{stdout}");
+    assert!(stdout.contains("pw-change=true"), "{stdout}");
+    assert!(stdout.contains("after-pw=none"), "{stdout}");
+    assert!(stdout.contains("relogin=user:ada"), "{stdout}");
+    assert!(stdout.contains("disable=true"), "{stdout}");
+    assert!(stdout.contains("after-disable=none"), "{stdout}");
+    assert!(stdout.contains("auth-disabled=invalid"), "{stdout}");
+    assert!(stdout.contains("logout=true"), "{stdout}");
+    assert!(stdout.contains("after-logout=none"), "{stdout}");
+    assert!(stdout.contains("logout-load=err"), "{stdout}");
+    assert!(stdout.contains("expired-load=err"), "{stdout}");
+    assert!(stdout.contains("expired-user=none"), "{stdout}");
+    assert!(
+        out.stderr.contains("live allocations: 0"),
+        "{}",
+        out.combined()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn auth_limiter_natively() {
+    let dir = temp_dir("auth-limiter");
+    let src = r#"use std::auth;
+use std::time;
+
+fn check(limiter: auth::Limiter, key: string, label: string) -> void {
+    match auth::limiter_check(limiter, key) {
+        Result::Ok(v) => println(label + "=" + str(v)),
+        Result::Err(e) => println(label + "=err:" + e)
+    };
+}
+
+fn main() -> int {
+    match auth::limiter(2, 60, 3) {
+        Result::Ok(limiter) => basic(limiter),
+        Result::Err(e) => println("limiter-err: " + e)
+    };
+    match auth::limiter(2, 1, 5) {
+        Result::Ok(limiter) => window_case(limiter),
+        Result::Err(e) => println("limiter-err: " + e)
+    };
+    match auth::limiter(2, 60, 2) {
+        Result::Ok(limiter) => capacity_case(limiter),
+        Result::Err(e) => println("limiter-err: " + e)
+    };
+    match auth::limiter(0, 60, 1) {
+        Result::Ok(_) => println("bad-entries=UNEXPECTED"),
+        Result::Err(e) => println("bad-entries=err")
+    };
+    match auth::limiter(1, 0, 1) {
+        Result::Ok(_) => println("bad-window=UNEXPECTED"),
+        Result::Err(e) => println("bad-window=err")
+    };
+    match auth::limiter(1, 1, 0) {
+        Result::Ok(_) => println("bad-attempts=UNEXPECTED"),
+        Result::Err(e) => println("bad-attempts=err")
+    };
+    match auth::limiter(2, 60, 2) {
+        Result::Ok(limiter) => key_cases(limiter),
+        Result::Err(e) => println("limiter-err: " + e)
+    };
+    return 0;
+}
+
+fn basic(limiter: auth::Limiter) -> void {
+    check(limiter, "ada", "ada1");
+    check(limiter, "ada", "ada2");
+    check(limiter, "ada", "ada3");
+    check(limiter, "ada", "ada4");
+    check(limiter, "bob", "bob1");
+    println("entries=" + str(auth::limiter_count(limiter)));
+    println("reset=" + str(auth::limiter_reset(limiter, "ada")));
+    println("reset-missing=" + str(auth::limiter_reset(limiter, "ada")));
+    println("entries-after-reset=" + str(auth::limiter_count(limiter)));
+}
+
+fn window_case(limiter: auth::Limiter) -> void {
+    check(limiter, "a", "win1");
+    time::sleep_ms(1100);
+    println("expired=" + str(auth::limiter_expire(limiter)));
+    check(limiter, "a", "win2");
+    println("after-window-entries=" + str(auth::limiter_count(limiter)));
+}
+
+fn capacity_case(limiter: auth::Limiter) -> void {
+    check(limiter, "a", "cap-a");
+    check(limiter, "b", "cap-b");
+    check(limiter, "c", "cap-c");
+    println("capacity-entries=" + str(auth::limiter_count(limiter)));
+    check(limiter, "d", "cap-d");
+    println("capacity-entries2=" + str(auth::limiter_count(limiter)));
+}
+
+fn key_cases(limiter: auth::Limiter) -> void {
+    check(limiter, "", "empty-key");
+    check(limiter, "@LONG@", "long-key");
+    check(limiter, "ok", "short-key");
+}
+"#
+    .replace("@LONG@", &"k".repeat(300));
+    let file = dir.join("main.blm");
+    write_file(&file, &src);
+    let out = run_bloom_env(
+        &["run", file.to_string_lossy().as_ref()],
+        &[("BLOOM_MEM_REPORT", "1")],
+    );
+    if no_toolchain(&out) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(out.code, 0, "{}", out.combined());
+    let stdout = norm(&out.stdout);
+    assert!(
+        stdout.contains("ada1=true\nada2=true\nada3=true\nada4=false"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("bob1=true"), "{stdout}");
+    assert!(stdout.contains("entries=2"), "{stdout}");
+    assert!(
+        stdout.contains("reset=true\nreset-missing=false"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("entries-after-reset=1"), "{stdout}");
+    assert!(stdout.contains("win1=true"), "{stdout}");
+    assert!(stdout.contains("expired=1"), "{stdout}");
+    assert!(stdout.contains("win2=true"), "{stdout}");
+    assert!(stdout.contains("capacity-entries=2"), "{stdout}");
+    assert!(stdout.contains("cap-c=true"), "{stdout}");
+    assert!(stdout.contains("cap-d=true"), "{stdout}");
+    assert!(stdout.contains("capacity-entries2=2"), "{stdout}");
+    assert!(stdout.contains("bad-entries=err"), "{stdout}");
+    assert!(stdout.contains("bad-window=err"), "{stdout}");
+    assert!(stdout.contains("bad-attempts=err"), "{stdout}");
+    assert!(
+        stdout.contains("empty-key=err:limiter_check: key must be 1..256 bytes"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("long-key=err:limiter_check: key must be 1..256 bytes"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("short-key=true"), "{stdout}");
+    assert!(
+        out.stderr.contains("live allocations: 0"),
+        "{}",
+        out.combined()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn auth_examples_natively() {
+    let dir = temp_dir("auth-examples");
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "auth_password.blm",
+            &[
+                "richtig: true",
+                "falsch: false",
+                "Neu-Hashen noetig: false",
+                "kaputter Hash: password_verify:",
+            ],
+        ),
+        (
+            "auth_users.blm",
+            &[
+                "Schema: true",
+                "Login: 2",
+                "falsches Passwort: authenticate: invalid credentials",
+                "admin hat admin (nachher): true",
+                "Login nach Aktivierung: 2",
+            ],
+        ),
+        (
+            "auth_sessions.blm",
+            &[
+                "alte id ungueltig: true",
+                "angemeldet: ada (id 1)",
+                "nach Passwortwechsel: nicht angemeldet",
+                "Logout: true",
+            ],
+        ),
+        (
+            "auth_limiter.blm",
+            &[
+                "Versuch 3: erlaubt=true",
+                "Versuch 4: erlaubt=false",
+                "nach Fenster: erlaubt=true",
+            ],
+        ),
+    ];
+    for (name, needles) in cases {
+        let stem = name.trim_end_matches(".blm");
+        let exe = dir.join(if cfg!(windows) {
+            format!("{stem}.exe")
+        } else {
+            stem.to_string()
+        });
+        let build = run_bloom(&[
+            "build",
+            &example(name),
+            "-o",
+            exe.to_string_lossy().as_ref(),
+        ]);
+        if no_toolchain(&build) {
+            eprintln!("skipping: no C toolchain available");
+            return;
+        }
+        assert_eq!(build.code, 0, "{}", build.combined());
+        let out = Command::new(&exe)
+            .env("BLOOM_MEM_REPORT", "1")
+            .current_dir(&dir)
+            .output()
+            .expect("run example");
+        let stdout = norm(&String::from_utf8_lossy(&out.stdout));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{name}: {stdout}\n{stderr}");
+        for needle in *needles {
+            assert!(
+                stdout.contains(needle),
+                "{name}: missing `{needle}` in {stdout}"
+            );
+        }
+        assert!(stderr.contains("live allocations: 0"), "{name}: {stderr}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn web_auth_app_e2e() {
+    use std::io::Read;
+
+    let dir = temp_dir("web-auth-app");
+    let exe = dir.join(if cfg!(windows) {
+        "web_auth_app.exe"
+    } else {
+        "web_auth_app"
+    });
+    let build = run_bloom(&[
+        "build",
+        &example("web_auth_app.blm"),
+        "-o",
+        exe.to_string_lossy().as_ref(),
+    ]);
+    if no_toolchain(&build) {
+        eprintln!("skipping: no C toolchain available");
+        return;
+    }
+    assert_eq!(build.code, 0, "{}", build.combined());
+
+    // Seed an admin account and the admin role in an isolated database.
+    let seed = dir.join("seed.blm");
+    write_file(
+        &seed,
+        r#"use std::auth;
+use std::db;
+use std::fs;
+
+fn admin_id(r: Result<int, string>) -> int {
+    return match r {
+        Result::Ok(v) => v,
+        Result::Err(e) => 0
+    };
+}
+
+fn seed(database: db::Database) -> void {
+    match auth::setup(database) {
+        Result::Ok(_) => println("seed-schema=ok"),
+        Result::Err(e) => println("seed-schema-err: " + e)
+    };
+    let id = admin_id(auth::register_user(database, "admin", "admin-passwort-123"));
+    if id > 0 {
+        auth::role_create(database, "admin");
+        auth::role_assign(database, id, "admin");
+        println("seed=ok");
+    } else {
+        println("seed=failed");
+    }
+}
+
+fn open_db() -> void {
+    match db::open("bloom_auth_demo/app.db") {
+        Result::Ok(database) => seed(database),
+        Result::Err(e) => println("seed-db-err: " + e)
+    };
+}
+
+fn main() -> int {
+    match fs::create_dir_all("bloom_auth_demo") {
+        Result::Ok(_) => open_db(),
+        Result::Err(e) => println("seed-mkdir-err: " + e)
+    };
+    return 0;
+}
+"#,
+    );
+    let seeded = run_bloom_env_in(&dir, &["run", seed.to_string_lossy().as_ref()], &[]);
+    assert_eq!(seeded.code, 0, "{}", seeded.combined());
+    assert!(
+        norm(&seeded.stdout).contains("seed=ok"),
+        "{}",
+        seeded.combined()
+    );
+
+    let mut child = std::process::Command::new(&exe)
+        .env("BLOOM_MEM_REPORT", "1")
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn server");
+    let mut reader = std::io::BufReader::new(child.stdout.take().expect("stdout"));
+    let port = read_port(&mut reader);
+
+    let client = dir.join("client.blm");
+    write_file(
+        &client,
+        r#"use std::http;
+
+fn cookie_of(r: http::HttpResponse) -> string {
+    return match http::header_get(r.headers, "set-cookie") {
+        Option::Some(line) => split(line, ";")[0],
+        Option::None => ""
+    };
+}
+
+fn token_of(body: string) -> string {
+    let parts = split(body, "name=\"csrf\" value=\"");
+    if len(parts) < 2 {
+        return "";
+    }
+    return split(parts[1], "\"")[0];
+}
+
+fn get(url: string) -> Result<http::HttpResponse, string> {
+    return http::get(url);
+}
+
+fn get_with(url: string, cookie: string) -> Result<http::HttpResponse, string> {
+    if len(cookie) > 0 {
+        return http::request("GET", url, "Cookie: " + cookie, "");
+    }
+    return http::get(url);
+}
+
+fn post(url: string, cookie: string, body: string) -> Result<http::HttpResponse, string> {
+    var headers = "Content-Type: application/x-www-form-urlencoded";
+    if len(cookie) > 0 {
+        headers = "Cookie: " + cookie + "\r\n" + headers;
+    }
+    return http::request("POST", url, headers, body);
+}
+
+fn show(label: string, r: http::HttpResponse) -> void {
+    println(label + "=" + str(r.status));
+}
+
+fn fail(e: string) -> int {
+    println("CLIENT-FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let port = trim(input(""));
+    let base = "http://127.0.0.1:" + port;
+
+    let r1 = get(base + "/register")?;
+    let c1 = cookie_of(r1);
+    let t1 = token_of(r1.body);
+    println("S1=" + str(r1.status) + " cookie=" + str(starts_with(c1, "sid=")) + " token=" + str(len(t1)));
+
+    let r2 = post(base + "/register", c1, "csrf=" + t1 + "&username=%3Cscript%3E&password=neuling-passwort-1")?;
+    show("S2", r2);
+    println("S2-no-script=" + str(!contains(r2.body, "<script>")));
+
+    let r3 = post(base + "/register", c1, "csrf=" + t1 + "&username=neuling&password=neuling-passwort-1")?;
+    println("S3=" + str(r3.status) + " ok=" + str(contains(r3.body, "Registriert")));
+
+    let r4 = get_with(base + "/login", c1)?;
+    let t4 = token_of(r4.body);
+
+    let r5 = post(base + "/login", c1, "csrf=" + t4 + "&username=neuling&password=falsch")?;
+    show("S5", r5);
+
+    let r6 = post(base + "/login", c1, "csrf=" + t4 + "&username=neuling&password=neuling-passwort-1")?;
+    let c6 = cookie_of(r6);
+    println("S6=" + str(r6.status) + " ok=" + str(contains(r6.body, "Angemeldet")) + " rotated=" + str(c6 != c1));
+    println("S6-httponly=" + str(contains(r6.headers, "HttpOnly")) + " secure=" + str(contains(r6.headers, "Secure")));
+
+    let r7 = get_with(base + "/protected", c6)?;
+    println("S7=" + str(r7.status) + " auth=" + str(contains(r7.body, "neuling")));
+    let t7 = token_of(r7.body);
+
+    let r8 = get_with(base + "/admin", c6)?;
+    show("S8", r8);
+
+    let r9 = post(base + "/logout", c6, "csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")?;
+    show("S9", r9);
+
+    let r10 = post(base + "/logout", c6, "csrf=" + t7)?;
+    println("S10=" + str(r10.status) + " ok=" + str(contains(r10.body, "Abgemeldet")) + " cleared=" + str(contains(r10.headers, "Max-Age=0")));
+
+    let r11 = get_with(base + "/protected", c6)?;
+    show("S11", r11);
+
+    let r12 = get(base + "/login")?;
+    let c12 = cookie_of(r12);
+    let t12 = token_of(r12.body);
+
+    let r13 = post(base + "/login", c12, "csrf=" + t12 + "&username=admin&password=admin-passwort-123")?;
+    let c13 = cookie_of(r13);
+    println("S13=" + str(r13.status) + " ok=" + str(contains(r13.body, "Angemeldet")));
+
+    let r14 = get_with(base + "/admin", c13)?;
+    let t14 = token_of(r14.body);
+    println("S14=" + str(r14.status) + " admin=" + str(contains(r14.body, "Admin-Bereich")) + " role=" + str(contains(r14.body, "admin")));
+
+    let r15 = post(base + "/admin/disable", c13, "csrf=" + t14 + "&username=neuling")?;
+    println("S15=" + str(r15.status) + " ok=" + str(contains(r15.body, "Deaktiviert")));
+
+    let r16a = get(base + "/login")?;
+    let c16 = cookie_of(r16a);
+    let t16 = token_of(r16a.body);
+    let r16 = post(base + "/login", c16, "csrf=" + t16 + "&username=neuling&password=neuling-passwort-1")?;
+    show("S16", r16);
+
+    let r17 = post(base + "/account/password", c13, "csrf=" + t14 + "&password=admin-neues-passwort")?;
+    println("S17=" + str(r17.status) + " ok=" + str(contains(r17.body, "Passwort geaendert")));
+
+    let r18 = get_with(base + "/protected", c13)?;
+    show("S18", r18);
+
+    let r19 = get(base + "/login")?;
+    let c19 = cookie_of(r19);
+    let t19 = token_of(r19.body);
+    let r20 = post(base + "/login", c19, "csrf=" + t19 + "&username=admin&password=admin-neues-passwort")?;
+    println("S20=" + str(r20.status) + " ok=" + str(contains(r20.body, "Angemeldet")));
+    return Result::Ok(0);
+}
+"#,
+    );
+    let client_out = run_bloom_stdin_env(
+        &["run", client.to_string_lossy().as_ref()],
+        &format!("{port}\n"),
+        &[("BLOOM_MEM_REPORT", "1")],
+    );
+    assert_eq!(client_out.code, 0, "{}", client_out.combined());
+    let stdout = norm(&client_out.stdout);
+    assert!(stdout.contains("S1=200 cookie=true token=43"), "{stdout}");
+    assert!(stdout.contains("S2=400"), "{stdout}");
+    assert!(stdout.contains("S2-no-script=true"), "{stdout}");
+    assert!(stdout.contains("S3=200 ok=true"), "{stdout}");
+    assert!(stdout.contains("S5=401"), "{stdout}");
+    assert!(stdout.contains("S6=200 ok=true rotated=true"), "{stdout}");
+    assert!(stdout.contains("S6-httponly=true secure=false"), "{stdout}");
+    assert!(stdout.contains("S7=200 auth=true"), "{stdout}");
+    assert!(stdout.contains("S8=403"), "{stdout}");
+    assert!(
+        stdout.contains("S9=403"),
+        "CSRF must guard logout: {stdout}"
+    );
+    assert!(stdout.contains("S10=200 ok=true cleared=true"), "{stdout}");
+    assert!(stdout.contains("S11=403"), "{stdout}");
+    assert!(stdout.contains("S13=200 ok=true"), "{stdout}");
+    assert!(stdout.contains("S14=200 admin=true role=true"), "{stdout}");
+    assert!(stdout.contains("S15=200 ok=true"), "{stdout}");
+    assert!(
+        stdout.contains("S16=401"),
+        "disabled account must not log in: {stdout}"
+    );
+    assert!(stdout.contains("S17=200 ok=true"), "{stdout}");
+    assert!(
+        stdout.contains("S18=403"),
+        "password change invalidates the session: {stdout}"
+    );
+    assert!(stdout.contains("S20=200 ok=true"), "{stdout}");
+    assert!(
+        client_out.stderr.contains("live allocations: 0"),
+        "{}",
+        client_out.combined()
+    );
+
+    let status = child.wait().expect("wait");
+    let mut rest = String::new();
+    reader.read_to_string(&mut rest).expect("rest");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("stderr read");
+    assert_eq!(status.code(), Some(0), "{rest}\n{stderr}");
+    assert!(stderr.contains("live allocations: 0"), "{stderr}");
+    assert!(stderr.contains("live sockets: 0"), "{stderr}");
+    assert!(
+        !dir.join("bloom_auth_demo").exists(),
+        "demo dir must be removed"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

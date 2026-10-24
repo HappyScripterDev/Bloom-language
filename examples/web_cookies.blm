@@ -50,9 +50,7 @@ fn set_and_send(conn: int, tmpl: html::Template, cookies: web::Cookies, options:
 }
 
 fn run() -> Result<int, string> {
-    let src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Cookies</title></head>" +
-        "<body><h1>Cookies</h1><p>Namen: {{names}}</p>" +
-        "<p>lang: {{lang}}</p><p>theme: {{theme}}</p></body></html>";
+    let src = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Cookies</title></head>" + "<body><h1>Cookies</h1><p>Namen: {{names}}</p>" + "<p>lang: {{lang}}</p><p>theme: {{theme}}</p></body></html>";
     let tmpl = html::template(src)?;
     let options = web::CookieOptions {
         path: "/",

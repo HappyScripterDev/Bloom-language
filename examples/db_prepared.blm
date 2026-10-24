@@ -16,7 +16,7 @@ fn run() -> Result<int, string> {
 
     let query = db::prepare(database, "SELECT i, f, b, s, n FROM werte")?;
     let has_row = db::step(query)?;
-    if !has_row {
+    if ! has_row {
         return Result::Err("keine Zeile");
     }
     println("i=" + str(db::column_int(query, 0)?));

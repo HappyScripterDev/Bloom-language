@@ -5,12 +5,10 @@
 use std::http;
 
 fn show(r: http::HttpResponse) -> string {
-    return "Status: " + str(r.status) + " " + r.reason + "\n" +
-        "Content-Type: " + match http::header_get(r.headers, "content-type") {
-            Option::Some(v) => v,
-            Option::None => "(fehlt)"
-        } + "\n" +
-        "Body: " + r.body;
+    return "Status: " + str(r.status) + " " + r.reason + "\n" + "Content-Type: " + match http::header_get(r.headers, "content-type") {
+        Option::Some(v) => v,
+        Option::None => "(fehlt)"
+    } + "\n" + "Body: " + r.body;
 }
 
 fn main() -> int {

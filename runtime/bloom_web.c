@@ -2314,6 +2314,7 @@ static bloom_enum_Result_str_str bloom_web_build_set_cookie(
     bloom_str value,
     bloom_str path,
     int64_t max_age,
+    bool emit_zero_max_age,
     const char *same_site,
     size_t same_site_len,
     bool http_only,
@@ -2350,9 +2351,10 @@ static bloom_enum_Result_str_str bloom_web_build_set_cookie(
             "SameSite=None requires Secure"
         ));
     }
+    bool include_age = max_age > 0 || (max_age == 0 && emit_zero_max_age);
     size_t total = 12 + name.len + 1 + value.len;
     total += path.len > 0 ? 8 + path.len : 0;
-    total += max_age > 0 ? 11 + 20 : 0;
+    total += include_age ? 10 + 20 : 0;
     total += http_only ? 10 : 0;
     total += secure ? 8 : 0;
     total += same_site_len > 0 ? 11 + same_site_len : 0;
@@ -2375,7 +2377,7 @@ static bloom_enum_Result_str_str bloom_web_build_set_cookie(
         memcpy(buf + at, path.data, path.len);
         at += path.len;
     }
-    if (max_age > 0) {
+    if (include_age) {
         char num[24];
         int n = snprintf(num, sizeof num, "%" PRId64, max_age);
         memcpy(buf + at, "; Max-Age=", 10);
@@ -2424,6 +2426,7 @@ bloom_enum_Result_str_str bloom_web_set_cookie(
         value,
         options.f_path,
         options.f_max_age,
+        false,
         same_site,
         same_site_len,
         options.f_http_only,
@@ -2450,6 +2453,7 @@ bloom_enum_Result_str_str bloom_web_delete_cookie(
         empty,
         path,
         0,
+        true,
         "Lax",
         3,
         true,
@@ -3005,6 +3009,82 @@ bool bloom_web_session_registered(
     return false;
 }
 
+/*
+ * Replaces a registered session with a fresh identity: new random ID, new
+ * CSRF token, same data and the same absolute expiry. The old ID leaves the
+ * store immediately (session fixation defence); the old handle keeps its data
+ * for the caller but is no longer registered. Fails without changing
+ * anything when the session is not registered or the random source fails.
+ */
+bloom_enum_Result_std_web_Session_str bloom_web_session_regenerate(
+    bloom_struct_std_web_SessionStore store,
+    bloom_struct_std_web_Session session
+) {
+    bloom_enum_Result_std_web_Session_str r;
+    bloom_web_session_store *s = bloom_web_store_unwrap(store);
+    bloom_web_session *old = bloom_web_session_unwrap(session);
+    if (s == NULL || old == NULL) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_web_msg(
+            "session_regenerate",
+            "invalid session store or session"
+        );
+        return r;
+    }
+    bloom_web_store_purge(s);
+    size_t index = s->count;
+    for (size_t i = 0; i < s->count; i++) {
+        if (s->items[i] == old) {
+            index = i;
+            break;
+        }
+    }
+    if (index == s->count) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_web_msg(
+            "session_regenerate",
+            "session is no longer registered"
+        );
+        return r;
+    }
+    char idbuf[BLOOM_WEB_SESSION_ID_CHARS];
+    char csrfbuf[BLOOM_WEB_CSRF_CHARS];
+    if (!bloom_web_random_token(idbuf, BLOOM_WEB_SESSION_ID_CHARS, "session_regenerate")
+        || !bloom_web_random_token(
+            csrfbuf,
+            BLOOM_WEB_CSRF_CHARS,
+            "session_regenerate"
+        )) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_web_msg(
+            "session_regenerate",
+            "secure random source unavailable"
+        );
+        return r;
+    }
+    bloom_web_session *fresh = (bloom_web_session *)calloc(
+        1,
+        sizeof(bloom_web_session)
+    );
+    if (fresh == NULL) {
+        bloom_panicf(NULL, 0, "out of memory");
+    }
+    fresh->rc = 1;
+    fresh->id = bloom_str_from_bytes(idbuf, BLOOM_WEB_SESSION_ID_CHARS);
+    fresh->csrf = bloom_str_from_bytes(csrfbuf, BLOOM_WEB_CSRF_CHARS);
+    bloom_json_retain(old->data.f_id);
+    fresh->data = old->data;
+    fresh->expires_at_ms = old->expires_at_ms;
+    bloom_session_handle old_handle = (bloom_session_handle)(intptr_t)old;
+    bloom_web_session_release(&old_handle);
+    s->items[index] = fresh;
+    fresh->rc++;
+    bloom_live_allocs++;
+    r.tag = 0;
+    r.data.m_Ok._0 = bloom_web_session_wrap(fresh);
+    return r;
+}
+
 int64_t bloom_web_session_expire(bloom_struct_std_web_SessionStore store) {
     bloom_web_session_store *s = bloom_web_store_unwrap(store);
     if (s == NULL) {
@@ -3041,6 +3121,7 @@ static bloom_enum_Result_str_str bloom_web_session_cookie_impl(
         s->id,
         path,
         max_age_seconds,
+        false,
         "Lax",
         3,
         true,

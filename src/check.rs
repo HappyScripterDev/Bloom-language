@@ -1182,6 +1182,9 @@ impl Checker {
                 Some(crate::modules::BuiltinModule::Db) => {
                     self.register_db_functions(&m.name);
                 }
+                Some(crate::modules::BuiltinModule::Auth) => {
+                    self.register_auth_functions(&m.name);
+                }
                 Some(crate::modules::BuiltinModule::Win32) => {
                     if cfg!(windows) {
                         self.register_win32_functions(&m.name);
@@ -1960,8 +1963,14 @@ impl Checker {
             (
                 "session_registered",
                 "bloom_web_session_registered",
-                vec![store_ty, session_ty],
+                vec![store_ty.clone(), session_ty.clone()],
                 Type::Bool,
+            ),
+            (
+                "session_regenerate",
+                "bloom_web_session_regenerate",
+                vec![store_ty, session_ty],
+                str_err(Type::Struct(format!("{}::Session", module), Vec::new())),
             ),
         ];
         for (name, c_name, params, ret) in defs {
@@ -2242,6 +2251,229 @@ impl Checker {
         }
     }
 
+    fn register_auth_functions(&mut self, module: &str) {
+        // Authentication builds on SQLite, JSON session data and the web
+        // session/CSRF machinery; register those signatures (and runtimes)
+        // first.
+        self.register_web_functions("std::web");
+        self.register_db_functions("std::db");
+        let span = Span::point(1, 1);
+        let user_canonical = format!("{}::UserInfo", module);
+        self.structs
+            .entry(user_canonical)
+            .or_insert_with(|| StructInfo {
+                params: Vec::new(),
+                fields: vec![
+                    StructField {
+                        name: "id".to_string(),
+                        ty: Type::Int,
+                    },
+                    StructField {
+                        name: "username".to_string(),
+                        ty: Type::String,
+                    },
+                    StructField {
+                        name: "display_name".to_string(),
+                        ty: Type::String,
+                    },
+                    StructField {
+                        name: "active".to_string(),
+                        ty: Type::Bool,
+                    },
+                    StructField {
+                        name: "auth_version".to_string(),
+                        ty: Type::Int,
+                    },
+                ],
+                span,
+                module: module.to_string(),
+                is_pub: true,
+            });
+        let limiter_canonical = format!("{}::Limiter", module);
+        self.structs
+            .entry(limiter_canonical)
+            .or_insert_with(|| StructInfo {
+                params: Vec::new(),
+                fields: vec![StructField {
+                    name: "id".to_string(),
+                    ty: Type::Limiter,
+                }],
+                span,
+                module: module.to_string(),
+                is_pub: true,
+            });
+        let db_ty = Type::Struct("std::db::Database".to_string(), Vec::new());
+        let store_ty = Type::Struct("std::web::SessionStore".to_string(), Vec::new());
+        let session_ty = Type::Struct("std::web::Session".to_string(), Vec::new());
+        let user_ty = Type::Struct(format!("{}::UserInfo", module), Vec::new());
+        let limiter_ty = Type::Struct(format!("{}::Limiter", module), Vec::new());
+        let str_err = |ok: Type| Type::Enum("Result".to_string(), vec![ok, Type::String]);
+        let opt_user = Type::Enum("Option".to_string(), vec![user_ty.clone()]);
+        let defs: Vec<(&str, &str, Vec<Type>, Type)> = vec![
+            (
+                "password_hash",
+                "bloom_auth_password_hash",
+                vec![Type::String],
+                str_err(Type::String),
+            ),
+            (
+                "password_verify",
+                "bloom_auth_password_verify",
+                vec![Type::String, Type::String],
+                str_err(Type::Bool),
+            ),
+            (
+                "password_needs_rehash",
+                "bloom_auth_password_needs_rehash",
+                vec![Type::String],
+                str_err(Type::Bool),
+            ),
+            (
+                "setup",
+                "bloom_auth_setup",
+                vec![db_ty.clone()],
+                str_err(Type::Bool),
+            ),
+            (
+                "register_user",
+                "bloom_auth_register_user",
+                vec![db_ty.clone(), Type::String, Type::String],
+                str_err(Type::Int),
+            ),
+            (
+                "authenticate",
+                "bloom_auth_authenticate",
+                vec![db_ty.clone(), Type::String, Type::String],
+                str_err(Type::Int),
+            ),
+            (
+                "user_get",
+                "bloom_auth_user_get",
+                vec![db_ty.clone(), Type::Int],
+                str_err(user_ty.clone()),
+            ),
+            (
+                "user_find",
+                "bloom_auth_user_find",
+                vec![db_ty.clone(), Type::String],
+                str_err(Type::Int),
+            ),
+            (
+                "user_disable",
+                "bloom_auth_user_disable",
+                vec![db_ty.clone(), Type::Int],
+                str_err(Type::Bool),
+            ),
+            (
+                "user_enable",
+                "bloom_auth_user_enable",
+                vec![db_ty.clone(), Type::Int],
+                str_err(Type::Bool),
+            ),
+            (
+                "password_change",
+                "bloom_auth_password_change",
+                vec![db_ty.clone(), Type::Int, Type::String],
+                str_err(Type::Bool),
+            ),
+            (
+                "login",
+                "bloom_auth_login",
+                vec![
+                    store_ty.clone(),
+                    session_ty.clone(),
+                    db_ty.clone(),
+                    Type::String,
+                    Type::String,
+                ],
+                str_err(session_ty.clone()),
+            ),
+            (
+                "logout",
+                "bloom_auth_logout",
+                vec![store_ty.clone(), session_ty.clone()],
+                str_err(Type::Bool),
+            ),
+            (
+                "current_user",
+                "bloom_auth_current_user",
+                vec![db_ty.clone(), store_ty.clone(), session_ty.clone()],
+                Type::Enum("Result".to_string(), vec![opt_user, Type::String]),
+            ),
+            (
+                "role_create",
+                "bloom_auth_role_create",
+                vec![db_ty.clone(), Type::String],
+                str_err(Type::Bool),
+            ),
+            (
+                "role_delete",
+                "bloom_auth_role_delete",
+                vec![db_ty.clone(), Type::String],
+                str_err(Type::Bool),
+            ),
+            (
+                "role_assign",
+                "bloom_auth_role_assign",
+                vec![db_ty.clone(), Type::Int, Type::String],
+                str_err(Type::Bool),
+            ),
+            (
+                "role_remove",
+                "bloom_auth_role_remove",
+                vec![db_ty.clone(), Type::Int, Type::String],
+                str_err(Type::Bool),
+            ),
+            (
+                "roles_of",
+                "bloom_auth_roles_of",
+                vec![db_ty.clone(), Type::Int],
+                Type::Enum(
+                    "Result".to_string(),
+                    vec![Type::Array(Box::new(Type::String)), Type::String],
+                ),
+            ),
+            (
+                "has_role",
+                "bloom_auth_has_role",
+                vec![db_ty.clone(), Type::Int, Type::String],
+                str_err(Type::Bool),
+            ),
+            (
+                "limiter",
+                "bloom_auth_limiter_new",
+                vec![Type::Int, Type::Int, Type::Int],
+                str_err(limiter_ty.clone()),
+            ),
+            (
+                "limiter_check",
+                "bloom_auth_limiter_check",
+                vec![limiter_ty.clone(), Type::String],
+                str_err(Type::Bool),
+            ),
+            (
+                "limiter_reset",
+                "bloom_auth_limiter_reset",
+                vec![limiter_ty.clone(), Type::String],
+                Type::Bool,
+            ),
+            (
+                "limiter_count",
+                "bloom_auth_limiter_count",
+                vec![limiter_ty.clone()],
+                Type::Int,
+            ),
+            (
+                "limiter_expire",
+                "bloom_auth_limiter_expire",
+                vec![limiter_ty],
+                Type::Int,
+            ),
+        ];
+        for (name, c_name, params, ret) in defs {
+            self.register_builtin_fn(module, name, c_name, params, ret);
+        }
+    }
     fn register_process_functions(&mut self, module: &str) {
         let span = Span::point(1, 1);
         let canonical = format!("{}::ProcessOutput", module);

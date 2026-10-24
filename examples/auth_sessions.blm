@@ -1,0 +1,77 @@
+// Anmeldung mit serverseitigen Sessions: Rotation, CSRF-Token,
+// Gueltigkeitspruefung und Logout.
+use std::auth;
+use std::db;
+use std::web;
+
+fn current(store: web::SessionStore, database: db::Database, session: web::Session, label: string) -> void {
+    match auth::current_user(database, store, session) {
+        Result::Ok(opt) => report(opt, label),
+        Result::Err(e) => println(label + ": FEHLER " + e)
+    };
+}
+
+fn report(opt: Option<auth::UserInfo>, label: string) -> void {
+    match opt {
+        Option::Some(u) => println(label + ": " + u.username + " (id " + str(u.id) + ")"),
+        Option::None => println(label + ": nicht angemeldet")
+    };
+}
+
+fn main() -> int {
+    match db::open_memory() {
+        Result::Ok(database) => with_db(database),
+        Result::Err(e) => println("DB-Fehler: " + e)
+    };
+    return 0;
+}
+
+fn with_db(database: db::Database) -> void {
+    match auth::setup(database) {
+        Result::Ok(_) => println("Schema bereit"),
+        Result::Err(e) => println("setup: " + e)
+    };
+    match auth::register_user(database, "ada", "erstes-passwort") {
+        Result::Ok(id) => with_user(database, id),
+        Result::Err(e) => println("register: " + e)
+    };
+}
+
+fn with_user(database: db::Database, user_id: int) -> void {
+    match web::session_store(8, 600) {
+        Result::Ok(store) => with_store(database, store, user_id),
+        Result::Err(e) => println("store: " + e)
+    };
+}
+
+fn with_store(database: db::Database, store: web::SessionStore, user_id: int) -> void {
+    match web::session_new(store) {
+        Result::Ok(anonymous) => login(database, store, user_id, anonymous),
+        Result::Err(e) => println("session: " + e)
+    };
+}
+
+fn login(database: db::Database, store: web::SessionStore, user_id: int, anonymous: web::Session) -> void {
+    let old_id = web::session_id(anonymous);
+    println("anonyme id: " + old_id);
+    match auth::login(store, anonymous, database, "ada", "erstes-passwort") {
+        Result::Ok(session) => logged_in(database, store, user_id, session, old_id),
+        Result::Err(e) => println("login: " + e)
+    };
+}
+
+fn logged_in(database: db::Database, store: web::SessionStore, user_id: int, session: web::Session, old_id: string) -> void {
+    println("neue id: " + web::session_id(session));
+    println("alte id ungueltig: " + str(web::session_registered(store, session) && web::session_id(session) != old_id));
+    current(store, database, session, "angemeldet");
+    match auth::password_change(database, user_id, "zweites-passwort") {
+        Result::Ok(_) => println("Passwort geaendert"),
+        Result::Err(e) => println("Passwort: " + e)
+    };
+    current(store, database, session, "nach Passwortwechsel");
+    match auth::logout(store, session) {
+        Result::Ok(v) => println("Logout: " + str(v)),
+        Result::Err(e) => println("Logout: " + e)
+    };
+    current(store, database, session, "nach Logout");
+}

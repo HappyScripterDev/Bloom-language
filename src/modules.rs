@@ -35,6 +35,7 @@ pub enum BuiltinModule {
     Web,
     Html,
     Db,
+    Auth,
     Win32,
 }
 
@@ -54,6 +55,7 @@ pub fn builtin_module(path: &[String]) -> Option<(&'static str, BuiltinModule)> 
         "std::web" => Some(("std::web", BuiltinModule::Web)),
         "std::html" => Some(("std::html", BuiltinModule::Html)),
         "std::db" => Some(("std::db", BuiltinModule::Db)),
+        "std::auth" => Some(("std::auth", BuiltinModule::Auth)),
         "std::win32" => Some(("std::win32", BuiltinModule::Win32)),
         _ => None,
     }

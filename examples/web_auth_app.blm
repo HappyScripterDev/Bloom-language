@@ -1,0 +1,508 @@
+// Kleine, vollstaendige Anmeldung: Registrierung, Login mit CSRF-Schutz,
+// Session-Rotation, geschuetzte Seite, Admin-Rolle, Logout, Passwortwechsel
+// und Deaktivierung. Persistenz in SQLite, Ausgabe ueber std::html.
+//
+// SICHERHEIT: Dieses Beispiel laeuft ueber einfaches HTTP auf 127.0.0.1 und
+// benutzt deshalb absichtlich "insecure" Cookies. Fuer den echten Betrieb
+// braucht es HTTPS (z. B. TLS-Terminierung davor) und Secure-Cookies
+// (web::session_cookie statt session_cookie_insecure).
+//
+// Die Seitenvorlagen werden der Einfachheit halber pro Anfrage geparst;
+// fuer groessere Anwendungen parst man sie beim Start einmal.
+use std::auth;
+use std::db;
+use std::web;
+use std::http;
+use std::json;
+use std::html;
+use std::net;
+use std::fs;
+
+fn send_text(conn: int, status: int, text: string) -> void {
+    match http::write_response(conn, status, "text/plain; charset=utf-8", text) {
+        Result::Ok(_) => println("Antwort " + str(status)),
+        Result::Err(e) => println("Schreibfehler: " + e)
+    };
+}
+
+fn render(conn: int, source: string, data: json::JsonValue, headers: string, status: int) -> void {
+    match html::template(source) {
+        Result::Ok(tmpl) => render_template(conn, tmpl, data, headers, status),
+        Result::Err(e) => send_text(conn, 500, "Vorlagenfehler")
+    };
+}
+
+fn render_template(conn: int, tmpl: html::Template, data: json::JsonValue, headers: string, status: int) -> void {
+    match html::render_page_with(conn, status, tmpl, data, headers) {
+        Result::Ok(_) => println("Seite " + str(status)),
+        Result::Err(e) => println("Renderfehler: " + e)
+    };
+}
+
+fn session_from(store: web::SessionStore, request: http::HttpRequest) -> Result<web::Session, string> {
+    let cookies = web::cookies(request)?;
+    return match web::session_load(store, cookies, "sid") {
+        Result::Ok(session) => Result::Ok(session),
+        Result::Err(e) => web::session_new(store)
+    };
+}
+
+fn session_headers(session: web::Session) -> string {
+    return match web::session_cookie_insecure(session, "sid", 600) {
+        Result::Ok(line) => line,
+        Result::Err(e) => ""
+    };
+}
+
+fn deleted_cookie() -> string {
+    return match web::delete_cookie("sid", "/", true) {
+        Result::Ok(line) => line,
+        Result::Err(e) => ""
+    };
+}
+
+fn token_of(session: web::Session) -> string {
+    return match web::csrf_token(session) {
+        Result::Ok(token) => token,
+        Result::Err(e) => ""
+    };
+}
+
+fn csrf_ok(session: web::Session, form: web::FormData) -> bool {
+    return match web::form_first(form, "csrf") {
+        Option::Some(token) => web::csrf_check(session, token),
+        Option::None => false
+    };
+}
+
+fn form_text(form: web::FormData, name: string) -> string {
+    return match web::form_first(form, name) {
+        Option::Some(v) => v,
+        Option::None => ""
+    };
+}
+
+fn limiter_key(username: string) -> string {
+    let key = to_lower(trim(username));
+    if len(key) == 0 {
+        return "unbekannt";
+    }
+    return key;
+}
+
+fn current_opt(database: db::Database, store: web::SessionStore, session: web::Session) -> Option<auth::UserInfo> {
+    return match auth::current_user(database, store, session) {
+        Result::Ok(opt) => opt,
+        Result::Err(e) => Option::None
+    };
+}
+
+fn state_text(database: db::Database, store: web::SessionStore, session: web::Session) -> string {
+    return match current_opt(database, store, session) {
+        Option::Some(u) => "angemeldet als " + u.username,
+        Option::None => "nicht angemeldet"
+    };
+}
+
+fn home_source() -> string {
+    return "<!doctype html><html><head><meta charset=\"utf-8\"><title>Auth-Demo</title></head>" + "<body><h1>Auth-Demo</h1><p>{{state}}</p><p>{{message}}</p><ul>" + "<li><a href=\"/register\">Registrieren</a></li>" + "<li><a href=\"/login\">Anmelden</a></li>" + "<li><a href=\"/protected\">Geschuetzter Bereich</a></li>" + "<li><a href=\"/admin\">Admin-Bereich</a></li></ul></body></html>";
+}
+
+fn register_source() -> string {
+    return "<!doctype html><html><head><meta charset=\"utf-8\"><title>Registrieren</title></head>" + "<body><h1>Registrieren</h1><form method=\"post\" action=\"/register\">" + "<input type=\"hidden\" name=\"csrf\" value=\"{{csrf}}\">" + "<p><input name=\"username\" placeholder=\"Benutzername\"></p>" + "<p><input type=\"password\" name=\"password\" placeholder=\"Passwort\"></p>" + "<p><button type=\"submit\">Konto anlegen</button></p></form>" + "<p>{{message}}</p><p><a href=\"/login\">Zur Anmeldung</a></p></body></html>";
+}
+
+fn login_source() -> string {
+    return "<!doctype html><html><head><meta charset=\"utf-8\"><title>Anmelden</title></head>" + "<body><h1>Anmelden</h1><form method=\"post\" action=\"/login\">" + "<input type=\"hidden\" name=\"csrf\" value=\"{{csrf}}\">" + "<p><input name=\"username\" placeholder=\"Benutzername\"></p>" + "<p><input type=\"password\" name=\"password\" placeholder=\"Passwort\"></p>" + "<p><button type=\"submit\">Anmelden</button></p></form>" + "<p>{{message}}</p><p><a href=\"/register\">Neues Konto</a></p></body></html>";
+}
+
+fn message_source() -> string {
+    return "<!doctype html><html><head><meta charset=\"utf-8\"><title>{{title}}</title></head>" + "<body><h1>{{title}}</h1><p>{{text}}</p><p><a href=\"/\">Start</a></p></body></html>";
+}
+
+fn protected_source() -> string {
+    return "<!doctype html><html><head><meta charset=\"utf-8\"><title>Geschuetzt</title></head>" + "<body><h1>Geschuetzter Bereich</h1><p>Angemeldet als {{username}}.</p>" + "<form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{{csrf}}\">" + "<button type=\"submit\">Abmelden</button></form>" + "<form method=\"post\" action=\"/account/password\"><input type=\"hidden\" name=\"csrf\" value=\"{{csrf}}\">" + "<p><input type=\"password\" name=\"password\" placeholder=\"Neues Passwort\"></p>" + "<button type=\"submit\">Passwort aendern</button></form>" + "<p>{{state}}</p></body></html>";
+}
+
+fn admin_source() -> string {
+    return "<!doctype html><html><head><meta charset=\"utf-8\"><title>Admin</title></head>" + "<body><h1>Admin-Bereich</h1><p>Benutzer: {{username}}</p><p>Rollen: {{roles}}</p>" + "<form method=\"post\" action=\"/admin/disable\"><input type=\"hidden\" name=\"csrf\" value=\"{{csrf}}\">" + "<p><input name=\"username\" placeholder=\"Benutzername\"></p>" + "<button type=\"submit\">Konto deaktivieren</button></form>" + "<p><a href=\"/\">Start</a></p></body></html>";
+}
+
+fn send_message(conn: int, session: web::Session, title: string, text: string) -> void {
+    let data = json::make_object();
+    json::set(data, "title", json::make_string(title));
+    json::set(data, "text", json::make_string(text));
+    render(conn, message_source(), data, session_headers(session), 200);
+}
+
+fn send_message_deleted(conn: int, title: string, text: string) -> void {
+    let data = json::make_object();
+    json::set(data, "title", json::make_string(title));
+    json::set(data, "text", json::make_string(text));
+    render(conn, message_source(), data, deleted_cookie(), 200);
+}
+
+fn render_home(conn: int, database: db::Database, store: web::SessionStore, session: web::Session, message: string) -> void {
+    let data = json::make_object();
+    json::set(data, "state", json::make_string(state_text(database, store, session)));
+    json::set(data, "message", json::make_string(message));
+    render(conn, home_source(), data, session_headers(session), 200);
+}
+
+fn render_register(conn: int, session: web::Session, message: string, status: int) -> void {
+    let data = json::make_object();
+    json::set(data, "csrf", json::make_string(token_of(session)));
+    json::set(data, "message", json::make_string(message));
+    render(conn, register_source(), data, session_headers(session), status);
+}
+
+fn render_login(conn: int, session: web::Session, message: string, status: int) -> void {
+    let data = json::make_object();
+    json::set(data, "csrf", json::make_string(token_of(session)));
+    json::set(data, "message", json::make_string(message));
+    render(conn, login_source(), data, session_headers(session), status);
+}
+
+fn render_protected(conn: int, database: db::Database, store: web::SessionStore, session: web::Session, user: auth::UserInfo) -> void {
+    let data = json::make_object();
+    json::set(data, "username", json::make_string(user.username));
+    json::set(data, "csrf", json::make_string(token_of(session)));
+    json::set(data, "state", json::make_string(state_text(database, store, session)));
+    render(conn, protected_source(), data, session_headers(session), 200);
+}
+
+fn roles_text(database: db::Database, user_id: int) -> string {
+    return match auth::roles_of(database, user_id) {
+        Result::Ok(roles) => join(roles, ", "),
+        Result::Err(e) => "?"
+    };
+}
+
+fn render_admin(conn: int, database: db::Database, store: web::SessionStore, session: web::Session, user: auth::UserInfo) -> void {
+    let data = json::make_object();
+    json::set(data, "username", json::make_string(user.username));
+    json::set(data, "roles", json::make_string(roles_text(database, user.id)));
+    json::set(data, "csrf", json::make_string(token_of(session)));
+    render(conn, admin_source(), data, session_headers(session), 200);
+}
+
+fn get_home(conn: int, database: db::Database, store: web::SessionStore, request: http::HttpRequest) -> void {
+    match session_from(store, request) {
+        Result::Ok(session) => render_home(conn, database, store, session, ""),
+        Result::Err(e) => send_text(conn, 500, "Sitzung nicht moeglich")
+    };
+}
+
+fn get_register(conn: int, store: web::SessionStore, request: http::HttpRequest) -> void {
+    match session_from(store, request) {
+        Result::Ok(session) => render_register(conn, session, "", 200),
+        Result::Err(e) => send_text(conn, 500, "Sitzung nicht moeglich")
+    };
+}
+
+fn get_login(conn: int, store: web::SessionStore, request: http::HttpRequest) -> void {
+    match session_from(store, request) {
+        Result::Ok(session) => render_login(conn, session, "", 200),
+        Result::Err(e) => send_text(conn, 500, "Sitzung nicht moeglich")
+    };
+}
+
+fn get_protected(conn: int, database: db::Database, store: web::SessionStore, request: http::HttpRequest) -> void {
+    match session_from(store, request) {
+        Result::Ok(session) => protected_with(conn, database, store, session),
+        Result::Err(e) => send_text(conn, 500, "Sitzung nicht moeglich")
+    };
+}
+
+fn protected_with(conn: int, database: db::Database, store: web::SessionStore, session: web::Session) -> void {
+    match current_opt(database, store, session) {
+        Option::Some(user) => render_protected(conn, database, store, session, user),
+        Option::None => send_text(conn, 403, "nicht angemeldet")
+    };
+}
+
+fn get_admin(conn: int, database: db::Database, store: web::SessionStore, request: http::HttpRequest) -> void {
+    match session_from(store, request) {
+        Result::Ok(session) => admin_with(conn, database, store, session),
+        Result::Err(e) => send_text(conn, 500, "Sitzung nicht moeglich")
+    };
+}
+
+fn admin_with(conn: int, database: db::Database, store: web::SessionStore, session: web::Session) -> void {
+    match current_opt(database, store, session) {
+        Option::Some(user) => admin_role(conn, database, store, session, user),
+        Option::None => send_text(conn, 403, "nicht angemeldet")
+    };
+}
+
+fn admin_role(conn: int, database: db::Database, store: web::SessionStore, session: web::Session, user: auth::UserInfo) -> void {
+    match auth::has_role(database, user.id, "admin") {
+        Result::Ok(true) => render_admin(conn, database, store, session, user),
+        Result::Ok(false) => send_text(conn, 403, "keine Berechtigung"),
+        Result::Err(e) => send_text(conn, 500, "Pruefung fehlgeschlagen")
+    };
+}
+
+fn post_register(conn: int, database: db::Database, store: web::SessionStore, request: http::HttpRequest) -> void {
+    match session_from(store, request) {
+        Result::Ok(session) => register_form_step(conn, database, session, request),
+        Result::Err(e) => send_text(conn, 500, "Sitzung nicht moeglich")
+    };
+}
+
+fn register_form_step(conn: int, database: db::Database, session: web::Session, request: http::HttpRequest) -> void {
+    match web::form_body_request(request) {
+        Result::Ok(form) => register_with_form(conn, database, session, form),
+        Result::Err(e) => send_text(conn, 400, "ungueltiges Formular")
+    };
+}
+
+fn register_with_form(conn: int, database: db::Database, session: web::Session, form: web::FormData) -> void {
+    if ! csrf_ok(session, form) {
+        send_text(conn, 403, "CSRF-Token fehlt oder ist ungueltig");
+        return;
+    }
+    let username = form_text(form, "username");
+    let password = form_text(form, "password");
+    match auth::register_user(database, username, password) {
+        Result::Ok(id) => send_message(conn, session, "Registriert", "Konto angelegt. Jetzt anmelden."),
+        Result::Err(e) => render_register(conn, session, e, 400)
+    };
+}
+
+fn post_login(conn: int, database: db::Database, store: web::SessionStore, limiter: auth::Limiter, request: http::HttpRequest) -> void {
+    match session_from(store, request) {
+        Result::Ok(session) => login_form_step(conn, database, store, limiter, session, request),
+        Result::Err(e) => send_text(conn, 500, "Sitzung nicht moeglich")
+    };
+}
+
+fn login_form_step(conn: int, database: db::Database, store: web::SessionStore, limiter: auth::Limiter, session: web::Session, request: http::HttpRequest) -> void {
+    match web::form_body_request(request) {
+        Result::Ok(form) => login_with_form(conn, database, store, limiter, session, form),
+        Result::Err(e) => send_text(conn, 400, "ungueltiges Formular")
+    };
+}
+
+fn login_with_form(conn: int, database: db::Database, store: web::SessionStore, limiter: auth::Limiter, session: web::Session, form: web::FormData) -> void {
+    if ! csrf_ok(session, form) {
+        send_text(conn, 403, "CSRF-Token fehlt oder ist ungueltig");
+        return;
+    }
+    let username = form_text(form, "username");
+    let password = form_text(form, "password");
+    match auth::limiter_check(limiter, limiter_key(username)) {
+        Result::Ok(true) => do_login(conn, database, store, limiter, session, username, password),
+        Result::Ok(false) => render_login(conn, session, "zu viele Versuche, bitte spaeter erneut", 429),
+        Result::Err(e) => send_text(conn, 500, "Login nicht moeglich")
+    };
+}
+
+fn do_login(conn: int, database: db::Database, store: web::SessionStore, limiter: auth::Limiter, session: web::Session, username: string, password: string) -> void {
+    match auth::login(store, session, database, username, password) {
+        Result::Ok(fresh) => login_ok(conn, limiter, fresh, username),
+        Result::Err(e) => render_login(conn, session, "Anmeldung fehlgeschlagen", 401)
+    };
+}
+
+fn login_ok(conn: int, limiter: auth::Limiter, fresh: web::Session, username: string) -> void {
+    auth::limiter_reset(limiter, limiter_key(username));
+    send_message(conn, fresh, "Angemeldet", "Willkommen, " + username + ".");
+}
+
+fn post_logout(conn: int, store: web::SessionStore, request: http::HttpRequest) -> void {
+    match session_from(store, request) {
+        Result::Ok(session) => logout_form_step(conn, store, session, request),
+        Result::Err(e) => send_text(conn, 500, "Sitzung nicht moeglich")
+    };
+}
+
+fn logout_form_step(conn: int, store: web::SessionStore, session: web::Session, request: http::HttpRequest) -> void {
+    match web::form_body_request(request) {
+        Result::Ok(form) => logout_with_form(conn, store, session, form),
+        Result::Err(e) => send_text(conn, 400, "ungueltiges Formular")
+    };
+}
+
+fn logout_with_form(conn: int, store: web::SessionStore, session: web::Session, form: web::FormData) -> void {
+    if ! csrf_ok(session, form) {
+        send_text(conn, 403, "CSRF-Token fehlt oder ist ungueltig");
+        return;
+    }
+    match auth::logout(store, session) {
+        Result::Ok(_) => send_message_deleted(conn, "Abgemeldet", "Die Sitzung wurde serverseitig beendet."),
+        Result::Err(e) => send_text(conn, 500, "Logout fehlgeschlagen")
+    };
+}
+
+fn post_password(conn: int, database: db::Database, store: web::SessionStore, request: http::HttpRequest) -> void {
+    match session_from(store, request) {
+        Result::Ok(session) => password_form_step(conn, database, store, session, request),
+        Result::Err(e) => send_text(conn, 500, "Sitzung nicht moeglich")
+    };
+}
+
+fn password_form_step(conn: int, database: db::Database, store: web::SessionStore, session: web::Session, request: http::HttpRequest) -> void {
+    match web::form_body_request(request) {
+        Result::Ok(form) => password_with_form(conn, database, store, session, form),
+        Result::Err(e) => send_text(conn, 400, "ungueltiges Formular")
+    };
+}
+
+fn password_with_form(conn: int, database: db::Database, store: web::SessionStore, session: web::Session, form: web::FormData) -> void {
+    if ! csrf_ok(session, form) {
+        send_text(conn, 403, "CSRF-Token fehlt oder ist ungueltig");
+        return;
+    }
+    match current_opt(database, store, session) {
+        Option::Some(user) => change_password(conn, database, store, session, user, form),
+        Option::None => send_text(conn, 403, "nicht angemeldet")
+    };
+}
+
+fn change_password(conn: int, database: db::Database, store: web::SessionStore, session: web::Session, user: auth::UserInfo, form: web::FormData) -> void {
+    let password = form_text(form, "password");
+    match auth::password_change(database, user.id, password) {
+        Result::Ok(_) => password_changed(conn, store, session),
+        Result::Err(e) => send_text(conn, 400, "Passwort konnte nicht geaendert werden")
+    };
+}
+
+fn password_changed(conn: int, store: web::SessionStore, session: web::Session) -> void {
+    auth::logout(store, session);
+    send_message_deleted(conn, "Passwort geaendert", "Bitte mit dem neuen Passwort neu anmelden.");
+}
+
+fn post_admin_disable(conn: int, database: db::Database, store: web::SessionStore, request: http::HttpRequest) -> void {
+    match session_from(store, request) {
+        Result::Ok(session) => disable_form_step(conn, database, store, session, request),
+        Result::Err(e) => send_text(conn, 500, "Sitzung nicht moeglich")
+    };
+}
+
+fn disable_form_step(conn: int, database: db::Database, store: web::SessionStore, session: web::Session, request: http::HttpRequest) -> void {
+    match web::form_body_request(request) {
+        Result::Ok(form) => disable_with_form(conn, database, store, session, form),
+        Result::Err(e) => send_text(conn, 400, "ungueltiges Formular")
+    };
+}
+
+fn disable_with_form(conn: int, database: db::Database, store: web::SessionStore, session: web::Session, form: web::FormData) -> void {
+    if ! csrf_ok(session, form) {
+        send_text(conn, 403, "CSRF-Token fehlt oder ist ungueltig");
+        return;
+    }
+    match current_opt(database, store, session) {
+        Option::Some(user) => disable_as_admin(conn, database, session, user, form),
+        Option::None => send_text(conn, 403, "nicht angemeldet")
+    };
+}
+
+fn disable_as_admin(conn: int, database: db::Database, session: web::Session, user: auth::UserInfo, form: web::FormData) -> void {
+    match auth::has_role(database, user.id, "admin") {
+        Result::Ok(true) => disable_target(conn, database, session, form),
+        Result::Ok(false) => send_text(conn, 403, "keine Berechtigung"),
+        Result::Err(e) => send_text(conn, 500, "Pruefung fehlgeschlagen")
+    };
+}
+
+fn disable_target(conn: int, database: db::Database, session: web::Session, form: web::FormData) -> void {
+    let username = form_text(form, "username");
+    match auth::user_find(database, username) {
+        Result::Ok(id) => disable_user(conn, database, session, id),
+        Result::Err(e) => send_text(conn, 404, "Benutzer nicht gefunden")
+    };
+}
+
+fn disable_user(conn: int, database: db::Database, session: web::Session, user_id: int) -> void {
+    match auth::user_disable(database, user_id) {
+        Result::Ok(_) => send_message(conn, session, "Deaktiviert", "Das Konto wurde deaktiviert."),
+        Result::Err(e) => send_text(conn, 400, "Deaktivierung fehlgeschlagen")
+    };
+}
+
+fn handle_get(conn: int, database: db::Database, store: web::SessionStore, request: http::HttpRequest) -> void {
+    if request.target == "/" {
+        get_home(conn, database, store, request);
+    } else if request.target == "/register" {
+        get_register(conn, store, request);
+    } else if request.target == "/login" {
+        get_login(conn, store, request);
+    } else if request.target == "/protected" {
+        get_protected(conn, database, store, request);
+    } else if request.target == "/admin" {
+        get_admin(conn, database, store, request);
+    } else {
+        send_text(conn, 404, "not found");
+    }
+}
+
+fn handle_post(conn: int, database: db::Database, store: web::SessionStore, limiter: auth::Limiter, request: http::HttpRequest) -> void {
+    if request.target == "/register" {
+        post_register(conn, database, store, request);
+    } else if request.target == "/login" {
+        post_login(conn, database, store, limiter, request);
+    } else if request.target == "/logout" {
+        post_logout(conn, store, request);
+    } else if request.target == "/account/password" {
+        post_password(conn, database, store, request);
+    } else if request.target == "/admin/disable" {
+        post_admin_disable(conn, database, store, request);
+    } else {
+        send_text(conn, 404, "not found");
+    }
+}
+
+fn handle(conn: int, database: db::Database, store: web::SessionStore, limiter: auth::Limiter, request: http::HttpRequest) -> void {
+    if request.method == "GET" {
+        handle_get(conn, database, store, request);
+    } else if request.method == "POST" {
+        handle_post(conn, database, store, limiter, request);
+    } else {
+        send_text(conn, 405, "Methode nicht erlaubt");
+    }
+}
+
+fn run() -> Result<int, string> {
+    let dir = "bloom_auth_demo";
+    let path = fs::join_path(dir, "app.db");
+    fs::create_dir_all(dir)?;
+    let code = serve_with_db(path, dir)?;
+    fs::remove_file(path)?;
+    fs::remove_dir(dir)?;
+    return Result::Ok(code);
+}
+
+fn serve_with_db(path: string, dir: string) -> Result<int, string> {
+    let database = db::open(path)?;
+    auth::setup(database)?;
+    let limiter = auth::limiter(256, 300, 5)?;
+    let store = web::session_store(256, 3600)?;
+    let listener = net::tcp_listen("127.0.0.1", 0, 8)?;
+    println(net::local_port(listener)?);
+    println("Auth-Server bereit");
+    var i = 0;
+    while i < 21 {
+        let conn = net::tcp_accept(listener)?;
+        match http::read_request(conn) {
+            Result::Ok(request) => handle(conn, database, store, limiter, request),
+            Result::Err(e) => println("Lesefehler: " + e)
+        };
+        net::tcp_close(conn);
+        i = i + 1;
+    }
+    net::tcp_close(listener);
+    return Result::Ok(0);
+}
+
+fn fail(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fail(e)
+    };
+}
