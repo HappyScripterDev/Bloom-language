@@ -1082,6 +1082,119 @@ einen anderen Monitor passt Windows den Rahmen an; Controls müssen mit
 - Keine automatische Layout-Engine; Positionen werden explizit gesetzt.
 - `message_box` ist modal und braucht eine Benutzeraktion.
 
+## 16g. Desktop mit Layout, Menü, Eingabefeld und Button
+
+Dieses Beispiel kombiniert Layout, Menü, Textfeld und Button. Es ist
+bewusst ohne zusätzliche Build-Tools lauffähig.
+
+```powershell
+cargo build --release
+.\target\release\bloom.exe build examples\desktop_gallery.blm
+.\examples\desktop_gallery.exe
+```
+
+Für sichtbare `println`-Ausgaben beim Testen:
+
+```powershell
+.\target\release\bloom.exe build examples\desktop_gallery.blm --console
+.\examples\desktop_gallery.exe
+```
+
+Das Muster:
+
+```bloom
+use std::desktop;
+
+fn run() -> Result<int, string> {
+    let win = desktop::window_create("Meine App", 560, 380)?;
+    let root = desktop::layout_create(win, "column")?;
+    desktop::layout_set_padding(win, root, 12)?;
+    desktop::layout_set_spacing(win, root, 8)?;
+
+    let head = desktop::label_create(win, "Name:", 0, 0, 10, 10)?;
+    desktop::layout_add_control(win, root, head, desktop::LayoutItem {
+        flex: 0, width: 0, height: 24, align: ""
+    })?;
+    let input = desktop::text_input_create(win, "", 0, 0, 10, 10)?;
+    desktop::layout_add_control(win, root, input, desktop::LayoutItem {
+        flex: 0, width: 0, height: 26, align: ""
+    })?;
+
+    let row = desktop::layout_create(win, "row")?;
+    let ok = desktop::button_create(win, "OK", 0, 0, 10, 10)?;
+    let status = desktop::label_create(win, "", 0, 0, 10, 10)?;
+    desktop::layout_add_control(win, row, ok, desktop::LayoutItem {
+        flex: 0, width: 120, height: 34, align: ""
+    })?;
+    desktop::layout_add_control(win, row, status, desktop::LayoutItem {
+        flex: 1, width: 0, height: 34, align: ""
+    })?;
+    desktop::layout_add_layout(win, root, row, desktop::LayoutItem {
+        flex: 0, width: 0, height: 34, align: ""
+    })?;
+    desktop::layout_attach(win, root)?;
+
+    desktop::menu_create(win)?;
+    let file = desktop::menu_add(win, "Datei")?;
+    desktop::menu_item(win, file, "Ende")?;
+
+    desktop::window_show(win)?;
+    while desktop::window_alive(win) {
+        match desktop::next_event(win) {
+            Result::Ok(ev) => handle(win, ev, input, status),
+            Result::Err(e) => println("Ende: " + e)
+        };
+    }
+    return Result::Ok(0);
+}
+
+fn handle(win: desktop::Window, ev: desktop::Event, input: int, status: int) -> void {
+    if ev.kind == "click" {
+        match desktop::control_text(win, input) {
+            Result::Ok(text) => set(win, status, "Hallo, " + text),
+            Result::Err(e) => println("Lesen: " + e)
+        };
+    } else if ev.kind == "menu" {
+        if ev.text == "Ende" {
+            match desktop::window_close(win) {
+                Result::Ok(_) => println("beendet"),
+                Result::Err(e) => println("Schliessen: " + e)
+            };
+        }
+    }
+}
+
+fn set(win: desktop::Window, label: int, text: string) -> void {
+    match desktop::control_set_text(win, label, text) {
+        Result::Ok(_) => println(text),
+        Result::Err(e) => println("Label: " + e)
+    };
+}
+```
+
+Wichtige Regeln:
+
+- Ein Layout wird mit `layout_attach` an das Fenster gebunden. Bei
+  Größen- und DPI-Änderungen berechnet die Runtime automatisch neu.
+- Feste Größen stehen in `width`/`height`; `0` bedeutet flexibel bzw.
+  auf der Querachse „füllen“. `flex` verteilt den Rest.
+- Menü-IDs liegen bei 1000+, Control-IDs ab 100, Layout-IDs ab 10000.
+- `combo_create`, `list_create` und `text_area_create` ergänzen die
+  Basiscontrols; `select`/`input`-Events liefern Text und Control-ID.
+- Dateien öffnet man mit `open_file_dialog`/`save_file_dialog` und
+  liest/schreibt danach mit `std::fs`.
+- Tab/Shift+Tab funktionieren über die native Windows-Navigation.
+  Deaktivierte und versteckte Controls werden übersprungen.
+
+### Grenzen
+
+- Nur Windows; andere Plattformen liefern Fehler.
+- Ein GUI-Thread; keine Threads/Closures im GUI-Code.
+- Keine automatische Größenänderung bereits gesetzter Controls bei
+  DPI-Wechseln (Layouts werden neu berechnet, manuelle Pixel bleiben).
+- Dateidialog-Erfolgspfade sind manuell geprüft; automatisiert ist der
+  Abbruchpfad.
+
 ## 17. HTTPS
 
 ```bloom

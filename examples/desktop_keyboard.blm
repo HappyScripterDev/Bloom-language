@@ -1,0 +1,90 @@
+// Tastatur: Tab und Shift+Tab nutzen die native Windows-Navigation.
+// Deaktivierte und versteckte Controls werden uebersprungen.
+use std::desktop;
+
+fn focus(win: desktop::Window) -> int {
+    return match desktop::focused_control(win) {
+        Result::Ok(v) => v,
+        Result::Err(e) => -1
+    };
+}
+
+fn on_event(win: desktop::Window, ev: desktop::Event) -> bool {
+    if ev.kind == "click" {
+        println("click:" + str(ev.control) + " focus=" + str(focus(win)));
+    } else if ev.kind == "input" {
+        println("input:" + str(ev.control) + " focus=" + str(focus(win)));
+    } else if ev.kind == "close" {
+        println("Fenster geschlossen");
+    }
+    return true;
+}
+
+fn step(win: desktop::Window) -> bool {
+    return match desktop::next_event(win) {
+        Result::Ok(ev) => on_event(win, ev),
+        Result::Err(e) => fail(e)
+    };
+}
+
+fn fail(e: string) -> bool {
+    println("FEHLER: " + e);
+    return false;
+}
+
+fn run() -> Result<int, string> {
+    let win = desktop::window_create("Bloom Desktop: Tastatur", 520, 300)?;
+    let root = desktop::layout_create(win, "column")?;
+    desktop::layout_set_padding(win, root, 14)?;
+    desktop::layout_set_spacing(win, root, 8)?;
+    let info = desktop::label_create(win, "Tab und Shift+Tab testen.", 0, 0, 10, 10)?;
+    desktop::layout_add_control(win, root, info, desktop::LayoutItem {
+        flex: 0, width: 0, height: 24, align: ""
+    })?;
+    let edit = desktop::text_input_create(win, "", 0, 0, 10, 10)?;
+    desktop::layout_add_control(win, root, edit, desktop::LayoutItem {
+        flex: 0, width: 0, height: 26, align: ""
+    })?;
+    let row = desktop::layout_create(win, "row")?;
+    let a = desktop::button_create(win, "A", 0, 0, 10, 10)?;
+    let b = desktop::button_create(win, "B", 0, 0, 10, 10)?;
+    desktop::layout_add_control(win, row, a, desktop::LayoutItem {
+        flex: 1, width: 0, height: 34, align: ""
+    })?;
+    desktop::layout_add_control(win, row, b, desktop::LayoutItem {
+        flex: 1, width: 0, height: 34, align: ""
+    })?;
+    let disabled = desktop::button_create(win, "Deaktiviert", 0, 0, 10, 10)?;
+    desktop::control_set_enabled(win, disabled, false)?;
+    let hidden = desktop::button_create(win, "Versteckt", 0, 0, 10, 10)?;
+    desktop::control_set_visible(win, hidden, false)?;
+    desktop::layout_add_layout(win, root, row, desktop::LayoutItem {
+        flex: 0, width: 0, height: 34, align: ""
+    })?;
+    let status = desktop::label_create(win, "Fokus folgt der Tastatur.", 0, 0, 10, 10)?;
+    desktop::layout_add_control(win, root, status, desktop::LayoutItem {
+        flex: 1, width: 0, height: 0, align: "start"
+    })?;
+    desktop::layout_attach(win, root)?;
+    desktop::window_show(win)?;
+    desktop::control_focus(win, edit)?;
+    println("READY focus=" + str(focus(win)));
+    while step(win) {
+        if !desktop::window_alive(win) {
+            break;
+        }
+    }
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

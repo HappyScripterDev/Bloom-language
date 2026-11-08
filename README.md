@@ -1,10 +1,13 @@
 # Bloom
 
-Bloom ist eine kleine, kompilierte Programmiersprache. Sie wird nach C
-übersetzt und dann von einem ganz normalen C-Compiler zu einer echten
-`.exe` gebaut. Von außen erinnert sie an Rust und C, aber alles ist
-absichtlich klein: keine Makros, keine Header, kein Build-System, das
-man erst studieren muss.
+Bloom ist auf **Server-Software, Webanwendungen und Automatisierung**
+ausgerichtet und wächst um native Windows-Desktopprogramme. Die Syntax
+ist an Rust angelehnt (Typen, `Result`, Pattern-Matching), die
+Bedienung bewusst einfach wie bei Python, und der Compiler erzeugt
+nativen C-Code mit C-ähnlicher Laufzeit. Alles, was für Server und
+Automatisierung nötig ist, soll ohne externe Laufzeit oder
+Paketmanager funktionieren: Dateien, Prozesse, HTTP/TLS, JSON,
+SQLite, Authentifizierung, Sessions und native GUI.
 
 Die Idee dahinter ist simpel. Ich wollte eine Sprache, die man an einem
 Nachmittag lernen kann, mit der man aber trotzdem echte Programme
@@ -12,7 +15,7 @@ schreiben kann: Dateien lesen, im Netzwerk reden, JSON verarbeiten,
 HTML-Seiten ausliefern. Alles davon ist schon eingebaut und braucht
 keine externen Bibliotheken.
 
-Stand: **0.21.0**. Getestet wird auf Windows (MSVC). Linux und macOS
+Stand: **0.22.0**. Getestet wird auf Windows (MSVC). Linux und macOS
 sind im Code vorgesehen, aber ich entwickle und teste fast nur auf
 Windows. `std::desktop` ist ausschließlich unter Windows verfügbar.
 
@@ -104,34 +107,44 @@ Wenn Bloom keinen C-Compiler findet, sagt es dir, was fehlt. Welchen
 es nimmt, kann man mit `BLOOM_CC` erzwingen (`set BLOOM_CC=clang`).
 Mehr dazu steht in [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
-## Was in 0.21 dazugekommen ist
+## Was in 0.22 dazugekommen ist
 
-- `std.desktop`: echte native Windows-Fenster und -Steuerelemente. Fenster
-  mit Titel und Größe, Labels, Buttons, einzeilige Texteingaben, Checkboxen,
-  Sichtbarkeit, Aktivierung, Fokus, Position und Größe.
-- Ereignisse ohne Callback-Zwang: `next_event` blockiert ohne Busy-Wait
-  und liefert `click`, `check`, `input` und `close` mit Control-ID und
-  aktuellen Werten. Ein privater Weckmechanismus verhindert verlorene
-  Ereignisse nach Cross-Thread-`SendMessage`; die Warteschlange ist pro
-  Fenster begrenzt.
-- Fenster und Ressourcen: `Window` ist ein verwalteter Handle mit
-  Referenzzählung. Schließen ist idempotent, Controls werden nach dem
-  Schließen abgelehnt, der letzte Handle zerstört das native Fenster.
-  Bis zu 64 Fenster und 512 Controls pro Fenster.
-- Unicode: alle Texte laufen über UTF-8 ↔ UTF-16 mit Validierung
-  (Umlaute, Emoji, Japanisch getestet). Steuerzeichen und NUL-Bytes in
-  Texten werden abgelehnt.
-- DPI: Per-Monitor-v2-Awareness beim ersten Fenster (mit Fallback),
-  öffentliche Koordinaten und Größen in logischen 96-DPI-Einheiten;
-  `WM_DPICHANGED` passt die Fenstergröße an. Controls werden nicht
-  automatisch umskaliert.
-- Windows-Build: Programme mit `std::desktop` linken standardmäßig als
-  GUI-Anwendung (`/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup`, kein
-  Konsolenfenster). `bloom build ... --console` erzwingt die Konsole,
-  z. B. für Tests. Normale Programme bleiben unverändert.
-- Beispiele: `desktop_hello`, `desktop_button`, `desktop_input`,
-  `desktop_checkbox`, `desktop_counter`, `desktop_layout`,
-  `desktop_unicode`, `desktop_errors`.
+- Native Layout-Engine: `row`/`column`-Container, Padding, Abstand,
+  feste und flexible Größen (Gewichte), Alignment, Verschachtelung bis
+  Tiefe 32 und automatische Neuberechnung bei `WM_SIZE` und
+  `WM_DPICHANGED`. Layouts sind fenstergebunden (IDs ab 10000), keine
+  separaten Handles nötig.
+- Drei neue native Controls: ComboBox (`combo_*`), mehrzeiliges
+  Textfeld (`text_area_create`, Zeilenenden werden LF/CRLF-normalisiert)
+  und ListBox (`list_*`) mit Hinzufügen, Entfernen, Anzahl, Auswahl und
+  ausgewähltem Text. Ungültige Indizes liefern `Err`.
+- Menüs: Menüleiste, Popup-Menüs, Einträge, Trennlinien und
+  Aktivieren/Deaktivieren. Menü-IDs liegen bei 1000+ und kollidieren
+  nicht mit Controls; Menü-Klicks erscheinen als `menu`-Events.
+- Dateidialoge: `open_file_dialog` und `save_file_dialog` über die
+  nativen Windows-Dialoge (Unicode-Pfade, Filter, Abbruch als
+  `Option::None`). `std::fs`/`std::path` bleiben für den eigentlichen
+  Dateizugriff zuständig.
+- Tastatur: Tab/Shift+Tab über die native Windows-Navigation
+  (`IsDialogMessage`), deaktivierte und versteckte Controls werden
+  übersprungen; `focused_control` liefert die aktuelle ID.
+- Robustere Ereignisse: Das Schließereignis geht nie verloren, wird
+  genau einmal geliefert und kommt nach bereits eingereihten Events.
+  Überlauf der 64-Platz-Warteschlange verwirft das älteste Ereignis und
+  zählt in `events_dropped`. Programmgesteuerte Textänderungen erzeugen
+  weiterhin keine `input`-Events.
+- DPI: `dpi_scale` für getestete Umrechnung; Layouts werden nach
+  Größen-/DPI-Änderungen neu angewendet. Die Grenzen (keine
+  automatische Control-Skalierung, keine echte Multi-Monitor-Prüfung)
+  sind dokumentiert.
+- Interne Test-Hooks: `debug_event_flood` und `debug_cross_thread`
+  (nicht Teil der stabilen API) für Queue- und Thread-Tests.
+- Beispiele: `desktop_layout_stack`, `desktop_resize`,
+  `desktop_combo_box`, `desktop_text_area`, `desktop_list_box`,
+  `desktop_menu`, `desktop_file_dialog`, `desktop_keyboard`,
+  `desktop_dpi`, `desktop_gallery`.
+- Behoben: Layout-Reihenfolge bei Spalten, geleakte Auswahl-Strings,
+  doppeltes Freigeben von Menüs/Layouts beim Schließen.
 
 ## Was (noch) nicht geht
 
@@ -145,12 +158,17 @@ Damit hier keine falschen Erwartungen entstehen:
   nicht (TLS-Terminierung davor).
 - `std::desktop` gibt es nur unter Windows; andere Systeme liefern einen
   klaren Fehler. MacOS/Linux-GUIs sind weder implementiert noch getestet.
-- Keine Menüs, Toolbars, Tabellen-/Tree-Controls, Drag-and-drop,
-  eigenen Zeichenflächen, Direct3D, Themes oder Designer.
+- Keine Toolbars, Tree-Views, Tabellen-Controls, Drag-and-drop,
+  eigenen Zeichenflächen, Direct3D, Themes oder GUI-Designer. Menüs
+  gibt es als einfache Menüleiste mit Popups und Trennlinien.
 - Keine Threads: Fenster und Controls gehören dem Thread, der sie
   erzeugt hat; alle Desktop-Aufrufe müssen dort laufen.
-- Keine automatische Layout-Engine und keine automatische
-  Control-Skalierung bei DPI-Wechseln oder Fenstergrößenänderung.
+- Keine automatische Control-Skalierung bei DPI-Wechseln; Layouts
+  werden neu berechnet, manuell positionierte Controls bleiben
+  pixelgenau. `Enter` löst keinen Standardbutton aus (Space auf dem
+  fokussierten Button funktioniert). Screenreader-/Multi-Monitor-Tests
+  fehlen; Dateidialog-Erfolgspfade wurden manuell geprüft, automatisiert
+  ist der Abbruchpfad.
 - Kein OAuth/OIDC, keine MFA, keine E-Mail-Verifikation, kein
   Passwort-Reset per E-Mail, kein JWT.
 - Die Sprache ist 0.x. Ich ändere APIs auch mal, wenn es sein muss.
@@ -171,7 +189,7 @@ Damit hier keine falschen Erwartungen entstehen:
 ## Selbst entwickeln
 
 ```bash
-cargo test                    # 529 Tests: Unit + echte kompilierte Programme
+cargo test                    # 538 Tests: Unit + echte kompilierte Programme
 cargo clippy --all-targets
 cargo fmt
 ```
@@ -194,6 +212,7 @@ bloom run examples/auth_password.blm
 bloom run examples/web_csrf_form.blm
 bloom run examples/ui_hello.blm
 bloom run examples/desktop_hello.blm
+bloom run examples/desktop_gallery.blm
 ```
 
 ## Lizenz

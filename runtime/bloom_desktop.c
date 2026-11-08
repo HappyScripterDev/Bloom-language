@@ -17,25 +17,65 @@
 
 #ifdef _WIN32
 
+#include <commdlg.h>
+
 #define BLOOM_DESKTOP_MAX_WINDOWS 64
 #define BLOOM_DESKTOP_MAX_CONTROLS 512
 #define BLOOM_DESKTOP_EVENT_CAP 64
 #define BLOOM_DESKTOP_MAX_TEXT (1024 * 1024)
+#define BLOOM_DESKTOP_MAX_AREA_TEXT (64 * 1024)
+#define BLOOM_DESKTOP_MAX_LAYOUTS 64
+#define BLOOM_DESKTOP_MAX_LAYOUT_CHILDREN 256
+#define BLOOM_DESKTOP_MAX_LAYOUT_DEPTH 32
+#define BLOOM_DESKTOP_MAX_LAYOUT_NODES 2048
+#define BLOOM_DESKTOP_MAX_MENU_ITEMS 128
+#define BLOOM_DESKTOP_MENU_ID_BASE 1000
+#define BLOOM_DESKTOP_LAYOUT_ID_BASE 10000
 #define BLOOM_DESKTOP_WAKE (WM_APP + 1)
 #define BLOOM_DESKTOP_MAGIC 0x424C444Bu /* "BLDK" */
 
 typedef struct bloom_desktop_control {
     HWND hwnd;
     int64_t id;
-    int kind; /* 0 label, 1 button, 2 checkbox, 3 edit */
+    int kind; /* 0 label, 1 button, 2 checkbox, 3 edit, 4 combo, 5 textarea, 6 list */
 } bloom_desktop_control;
 
 typedef struct bloom_desktop_event {
-    int kind; /* 0 click, 1 check, 2 input, 3 close */
+    int kind; /* 0 click, 1 check, 2 input, 3 close, 4 select, 5 menu */
     int64_t control;
     bloom_str text;
     bool checked;
 } bloom_desktop_event;
+
+typedef struct bloom_desktop_menu_entry {
+    int64_t id;
+    int64_t parent_id;
+    int position;
+    bool submenu;
+    bloom_str label;
+} bloom_desktop_menu_entry;
+
+typedef struct bloom_desktop_layout_child {
+    int type; /* 0 control, 1 layout */
+    int64_t control;
+    int64_t layout_id;
+    int64_t width;
+    int64_t height;
+    int flex;
+    int align; /* -1 inherit, 0 start, 1 center, 2 end, 3 stretch */
+} bloom_desktop_layout_child;
+
+typedef struct bloom_desktop_layout {
+    int64_t id;
+    int kind; /* 0 row, 1 column */
+    int64_t padding;
+    int64_t spacing;
+    int align;
+    int64_t parent_id;
+    int child_count;
+    int child_cap;
+    bloom_desktop_layout_child *children;
+} bloom_desktop_layout;
 
 typedef struct bloom_desktop_window {
     HWND hwnd;
@@ -44,7 +84,10 @@ typedef struct bloom_desktop_window {
     int rc;
     bool closed;
     bool counted;
+    bool close_delivered;
+    bool layout_dirty;
     int dpi;
+    int dropped_events;
     int64_t next_control_id;
     int control_count;
     bloom_desktop_control controls[BLOOM_DESKTOP_MAX_CONTROLS];
@@ -52,6 +95,14 @@ typedef struct bloom_desktop_window {
     int event_count;
     int suppress_events;
     bloom_desktop_event events[BLOOM_DESKTOP_EVENT_CAP];
+    HMENU menu;
+    int64_t next_menu_id;
+    int menu_count;
+    bloom_desktop_menu_entry menu_entries[BLOOM_DESKTOP_MAX_MENU_ITEMS];
+    int64_t next_layout_id;
+    int layout_count;
+    int64_t root_layout;
+    bloom_desktop_layout layouts[BLOOM_DESKTOP_MAX_LAYOUTS];
 } bloom_desktop_window;
 
 static bloom_desktop_window *bloom_desktop_windows[BLOOM_DESKTOP_MAX_WINDOWS];
@@ -374,10 +425,29 @@ static const char *bloom_desktop_kind_name(int kind) {
             return "check";
         case 2:
             return "input";
+        case 4:
+            return "select";
+        case 5:
+            return "menu";
         default:
             return "close";
     }
 }
+
+static bloom_desktop_menu_entry *bloom_desktop_menu_entry_for(
+    bloom_desktop_window *w,
+    int64_t id
+);
+static bool bloom_desktop_layout_apply(bloom_desktop_window *w);
+static bloom_str bloom_desktop_get_control_text(
+    bloom_desktop_window *w,
+    bloom_desktop_control *c
+);
+static bool bloom_desktop_set_control_text(
+    bloom_desktop_window *w,
+    bloom_desktop_control *c,
+    bloom_str text
+);
 
 static void bloom_desktop_push_event(
     bloom_desktop_window *w,
@@ -394,6 +464,7 @@ static void bloom_desktop_push_event(
         old->text.rc = 0;
         w->event_head = (w->event_head + 1) % BLOOM_DESKTOP_EVENT_CAP;
         w->event_count--;
+        w->dropped_events++;
     }
     int slot = (w->event_head + w->event_count) % BLOOM_DESKTOP_EVENT_CAP;
     w->events[slot].kind = kind;
@@ -423,16 +494,76 @@ static bool bloom_desktop_close_impl(bloom_desktop_window *w) {
         return false;
     }
     w->closed = true;
-    bloom_desktop_push_event(w, 3, 0, bloom_str_from_bytes("", 0), false);
+    for (int i = 0; i < w->menu_count; i++) {
+        bloom_str_drop(&w->menu_entries[i].label);
+        w->menu_entries[i].label.data = NULL;
+        w->menu_entries[i].label.len = 0;
+        w->menu_entries[i].label.rc = 0;
+    }
+    w->menu_count = 0;
+    for (int i = 0; i < w->layout_count; i++) {
+        free(w->layouts[i].children);
+        w->layouts[i].children = NULL;
+        w->layouts[i].child_count = 0;
+        w->layouts[i].child_cap = 0;
+    }
+    w->layout_count = 0;
+    w->root_layout = 0;
+    w->layout_dirty = false;
     HWND hwnd = w->hwnd;
     w->hwnd = NULL;
+    if (w->menu != NULL) {
+        if (hwnd != NULL && IsWindow(hwnd)) {
+            SetMenu(hwnd, NULL);
+        }
+        DestroyMenu(w->menu);
+        w->menu = NULL;
+    }
     if (hwnd != NULL && IsWindow(hwnd)) {
+        PostMessageW(hwnd, BLOOM_DESKTOP_WAKE, 0, 0);
         DestroyWindow(hwnd);
     }
     return true;
 }
 
 /* ---- window class and procedure -------------------------------------- */
+
+static bloom_str bloom_desktop_selected_text(HWND hwnd, int kind, bool *ok) {
+    *ok = true;
+    int index = (int)SendMessageW(hwnd, kind == 4 ? CB_GETCURSEL : LB_GETCURSEL, 0, 0);
+    if (index < 0) {
+        return bloom_str_from_bytes("", 0);
+    }
+    int len = (int)SendMessageW(
+        hwnd,
+        kind == 4 ? CB_GETLBTEXTLEN : LB_GETTEXTLEN,
+        (WPARAM)index,
+        0
+    );
+    if (len < 0 || len > BLOOM_DESKTOP_MAX_TEXT) {
+        *ok = false;
+        return bloom_str_from_bytes("", 0);
+    }
+    wchar_t *buf = (wchar_t *)malloc(((size_t)len + 1) * sizeof(wchar_t));
+    if (buf == NULL) {
+        bloom_panicf(NULL, 0, "out of memory");
+    }
+    LRESULT got = SendMessageW(
+        hwnd,
+        kind == 4 ? CB_GETLBTEXT : LB_GETTEXT,
+        (WPARAM)index,
+        (LPARAM)buf
+    );
+    bloom_str s = {0, NULL, 0};
+    if (got >= 0 && got <= len) {
+        s = bloom_desktop_from_utf16(buf, (int)got, ok);
+    } else {
+        *ok = false;
+        s = bloom_str_from_bytes("", 0);
+    }
+    free(buf);
+    return s;
+}
 
 static LRESULT CALLBACK bloom_desktop_proc(
     HWND hwnd,
@@ -456,6 +587,19 @@ static LRESULT CALLBACK bloom_desktop_proc(
         case WM_COMMAND: {
             int64_t id = (int64_t)LOWORD(wp);
             int code = HIWORD(wp);
+            if (lp == 0) {
+                bloom_desktop_menu_entry *entry = bloom_desktop_menu_entry_for(w, id);
+                if (entry != NULL && !entry->submenu) {
+                    bloom_desktop_push_event(
+                        w,
+                        5,
+                        id,
+                        bloom_str_clone(entry->label),
+                        false
+                    );
+                }
+                break;
+            }
             bloom_desktop_control *c = bloom_desktop_find_control(w, id);
             if (c == NULL) {
                 break;
@@ -471,24 +615,28 @@ static LRESULT CALLBACK bloom_desktop_proc(
                     bloom_str_from_bytes("", 0),
                     state == BST_CHECKED
                 );
-            } else if (c->kind == 3 && code == EN_CHANGE && w->suppress_events == 0) {
+            } else if ((c->kind == 3 || c->kind == 5)
+                && code == EN_CHANGE
+                && w->suppress_events == 0) {
+                bloom_str s = bloom_desktop_get_control_text(w, c);
+                bloom_desktop_push_event(w, 2, id, s, false);
+            } else if ((c->kind == 4 || c->kind == 6) && code == (c->kind == 4 ? CBN_SELCHANGE : LBN_SELCHANGE)) {
                 bool ok = false;
-                wchar_t *text = bloom_desktop_read_text(c->hwnd, &ok);
+                bloom_str s = bloom_desktop_selected_text(c->hwnd, c->kind, &ok);
                 if (ok) {
-                    bloom_str s = bloom_desktop_from_utf16(
-                        text,
-                        (int)wcslen(text),
-                        &ok
-                    );
-                    bloom_desktop_push_event(w, 2, id, s, false);
+                    bloom_desktop_push_event(w, 4, id, s, false);
+                } else {
+                    bloom_str_drop(&s);
                 }
-                free(text);
             }
             break;
         }
         case WM_CLOSE:
             bloom_desktop_close_impl(w);
             return 0;
+        case WM_SIZE:
+            w->layout_dirty = true;
+            break;
         case WM_DESTROY:
             if (w->counted) {
                 w->counted = false;
@@ -499,6 +647,7 @@ static LRESULT CALLBACK bloom_desktop_proc(
             return 0;
         case WM_DPICHANGED: {
             w->dpi = (int)HIWORD(wp);
+            w->layout_dirty = true;
             RECT *suggested = (RECT *)lp;
             if (suggested != NULL) {
                 SetWindowPos(
@@ -654,13 +803,14 @@ bloom_enum_Result_std_desktop_Window_str bloom_desktop_window_create(
     bloom_live_allocs++;
     w->dpi = (int)bloom_desktop_system_dpi();
     w->next_control_id = 100;
+    w->next_layout_id = BLOOM_DESKTOP_LAYOUT_ID_BASE;
     w->event_head = 0;
     w->event_count = 0;
     UINT dpi = (UINT)w->dpi;
     int px = (int)((width * dpi + 48) / 96);
     int py = (int)((height * dpi + 48) / 96);
     w->hwnd = CreateWindowExW(
-        0,
+        WS_EX_CONTROLPARENT,
         L"BloomDesktopWindow",
         wt,
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
@@ -940,6 +1090,119 @@ bloom_enum_Result_bool_str bloom_desktop_message_box(
 
 /* ---- public: controls ------------------------------------------------- */
 
+static bool bloom_desktop_area_text_ok(bloom_str s) {
+    if (s.len > BLOOM_DESKTOP_MAX_AREA_TEXT) {
+        return false;
+    }
+    for (size_t i = 0; i < s.len; i++) {
+        unsigned char ch = (unsigned char)s.data[i];
+        if (ch < 0x20 && ch != '\n' && ch != '\r' && ch != '\t') {
+            return false;
+        }
+        if (ch == 0x7F || (ch == 0 && i < s.len)) {
+            return false;
+        }
+    }
+    return s.len == 0 || memchr(s.data, 0, s.len) == NULL;
+}
+
+static bloom_str bloom_desktop_to_crlf(bloom_str s) {
+    size_t extra = 0;
+    for (size_t i = 0; i < s.len; i++) {
+        if (s.data[i] == '\n' && (i == 0 || s.data[i - 1] != '\r')) {
+            extra++;
+        }
+    }
+    if (extra == 0) {
+        return bloom_str_clone(s);
+    }
+    char *buf = (char *)malloc(s.len + extra + 1);
+    if (buf == NULL) {
+        bloom_panicf(NULL, 0, "out of memory");
+    }
+    size_t n = 0;
+    for (size_t i = 0; i < s.len; i++) {
+        if (s.data[i] == '\n' && (i == 0 || s.data[i - 1] != '\r')) {
+            buf[n++] = '\r';
+        }
+        buf[n++] = s.data[i];
+    }
+    bloom_str r = bloom_str_from_bytes(buf, n);
+    free(buf);
+    return r;
+}
+
+static bloom_str bloom_desktop_to_lf(bloom_str s) {
+    char *buf = (char *)malloc(s.len + 1);
+    if (buf == NULL) {
+        bloom_panicf(NULL, 0, "out of memory");
+    }
+    size_t n = 0;
+    for (size_t i = 0; i < s.len; i++) {
+        if (s.data[i] == '\r') {
+            if (i + 1 < s.len && s.data[i + 1] == '\n') {
+                continue;
+            }
+            buf[n++] = '\n';
+        } else {
+            buf[n++] = s.data[i];
+        }
+    }
+    bloom_str r = bloom_str_from_bytes(buf, n);
+    free(buf);
+    return r;
+}
+
+static bloom_str bloom_desktop_get_control_text(
+    bloom_desktop_window *w,
+    bloom_desktop_control *c
+) {
+    (void)w;
+    bool ok = false;
+    wchar_t *text = bloom_desktop_read_text(c->hwnd, &ok);
+    if (!ok) {
+        free(text);
+        return bloom_str_from_bytes("", 0);
+    }
+    bloom_str s = bloom_desktop_from_utf16(text, (int)wcslen(text), &ok);
+    free(text);
+    if (!ok) {
+        return bloom_str_from_bytes("", 0);
+    }
+    if (c->kind == 5) {
+        bloom_str normalized = bloom_desktop_to_lf(s);
+        bloom_str_drop(&s);
+        return normalized;
+    }
+    return s;
+}
+
+static bool bloom_desktop_set_control_text(
+    bloom_desktop_window *w,
+    bloom_desktop_control *c,
+    bloom_str text
+) {
+    bloom_str owned = {0, NULL, 0};
+    if (c->kind == 5) {
+        owned = bloom_desktop_to_crlf(text);
+    }
+    wchar_t *wt = bloom_desktop_to_utf16(c->kind == 5 ? owned : text);
+    bloom_str_drop(&owned);
+    if (wt == NULL) {
+        return false;
+    }
+    size_t limit = c->kind == 5 ? BLOOM_DESKTOP_MAX_AREA_TEXT : BLOOM_DESKTOP_MAX_TEXT;
+    if (wcslen(wt) > limit) {
+        free(wt);
+        return false;
+    }
+    w->suppress_events++;
+    BOOL ok = SetWindowTextW(c->hwnd, wt);
+    w->suppress_events--;
+    free(wt);
+    return ok != 0;
+}
+
 static bloom_enum_Result_i64_str bloom_desktop_create_control(
     bloom_struct_std_desktop_Window handle,
     bloom_str text,
@@ -950,16 +1213,19 @@ static bloom_enum_Result_i64_str bloom_desktop_create_control(
     const wchar_t *class_name,
     DWORD style,
     int kind,
+    bool multiline,
     const char *op
 ) {
     bloom_str err = {0, NULL, 0};
     if (!bloom_desktop_prepare(handle, op, &err)) {
         return bloom_desktop_err_i64(err);
     }
-    if (!bloom_desktop_text_ok(text)) {
+    if (multiline ? !bloom_desktop_area_text_ok(text) : !bloom_desktop_text_ok(text)) {
         return bloom_desktop_err_i64(bloom_desktop_msg(
             op,
-            "text exceeds 1048576 bytes or contains control/NUL bytes"
+            multiline
+                ? "text exceeds 65536 bytes or contains invalid control/NUL bytes"
+                : "text exceeds 1048576 bytes or contains control/NUL bytes"
         ));
     }
     if (x < -32768 || x > 32768 || y < -32768 || y > 32768) {
@@ -981,7 +1247,12 @@ static bloom_enum_Result_i64_str bloom_desktop_create_control(
             "too many controls in window (max 512)"
         ));
     }
-    wchar_t *wt = bloom_desktop_to_utf16(text);
+    bloom_str prepared = {0, NULL, 0};
+    if (multiline) {
+        prepared = bloom_desktop_to_crlf(text);
+    }
+    wchar_t *wt = bloom_desktop_to_utf16(multiline ? prepared : text);
+    bloom_str_drop(&prepared);
     if (wt == NULL) {
         return bloom_desktop_err_i64(bloom_desktop_msg(op, "text is not valid UTF-8"));
     }
@@ -990,6 +1261,7 @@ static bloom_enum_Result_i64_str bloom_desktop_create_control(
     int py = (int)((y * w->dpi + 48) / 96);
     int pw = (int)((width * w->dpi + 48) / 96);
     int ph = (int)((height * w->dpi + 48) / 96);
+    w->suppress_events++;
     HWND hwnd = CreateWindowExW(
         0,
         class_name,
@@ -1004,6 +1276,7 @@ static bloom_enum_Result_i64_str bloom_desktop_create_control(
         GetModuleHandleW(NULL),
         NULL
     );
+    w->suppress_events--;
     free(wt);
     if (hwnd == NULL) {
         return bloom_desktop_err_i64(bloom_desktop_werr(op, GetLastError()));
@@ -1014,6 +1287,14 @@ static bloom_enum_Result_i64_str bloom_desktop_create_control(
         (WPARAM)GetStockObject(DEFAULT_GUI_FONT),
         TRUE
     );
+    if (kind == 3 || kind == 5) {
+        SendMessageW(
+            hwnd,
+            EM_SETLIMITTEXT,
+            (WPARAM)(kind == 5 ? BLOOM_DESKTOP_MAX_AREA_TEXT : BLOOM_DESKTOP_MAX_TEXT),
+            0
+        );
+    }
     bloom_desktop_control *c = &w->controls[w->control_count++];
     c->hwnd = hwnd;
     c->id = id;
@@ -1039,6 +1320,7 @@ bloom_enum_Result_i64_str bloom_desktop_label_create(
         L"STATIC",
         SS_LEFT,
         0,
+        false,
         "label_create"
     );
 }
@@ -1061,6 +1343,7 @@ bloom_enum_Result_i64_str bloom_desktop_button_create(
         L"BUTTON",
         BS_PUSHBUTTON | WS_TABSTOP,
         1,
+        false,
         "button_create"
     );
 }
@@ -1083,6 +1366,7 @@ bloom_enum_Result_i64_str bloom_desktop_text_input_create(
         L"EDIT",
         ES_LEFT | ES_AUTOHSCROLL | WS_TABSTOP,
         3,
+        false,
         "text_input_create"
     );
 }
@@ -1105,7 +1389,109 @@ bloom_enum_Result_i64_str bloom_desktop_checkbox_create(
         L"BUTTON",
         BS_AUTOCHECKBOX | WS_TABSTOP,
         2,
+        false,
         "checkbox_create"
+    );
+}
+
+bloom_enum_Result_i64_str bloom_desktop_text_area_create(
+    bloom_struct_std_desktop_Window window,
+    bloom_str text,
+    int64_t x,
+    int64_t y,
+    int64_t width,
+    int64_t height
+) {
+    return bloom_desktop_create_control(
+        window,
+        text,
+        x,
+        y,
+        width,
+        height,
+        L"EDIT",
+        ES_MULTILINE | ES_WANTRETURN | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP,
+        5,
+        true,
+        "text_area_create"
+    );
+}
+
+bloom_enum_Result_i64_str bloom_desktop_combo_create(
+    bloom_struct_std_desktop_Window window,
+    bloom_str text,
+    int64_t x,
+    int64_t y,
+    int64_t width,
+    int64_t height
+) {
+    if (!bloom_desktop_text_ok(text)) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "combo_create",
+            "text exceeds 1048576 bytes or contains control/NUL bytes"
+        ));
+    }
+    bloom_str empty = {0, NULL, 0};
+    bloom_enum_Result_i64_str created = bloom_desktop_create_control(
+        window,
+        empty,
+        x,
+        y,
+        width,
+        height,
+        L"COMBOBOX",
+        CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP,
+        4,
+        false,
+        "combo_create"
+    );
+    if (created.tag != 0 || text.len == 0) {
+        return created;
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    if (w->control_count == 0) {
+        return created;
+    }
+    bloom_desktop_control *c = &w->controls[w->control_count - 1];
+    wchar_t *wt = bloom_desktop_to_utf16(text);
+    if (wt == NULL) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "combo_create",
+            "text is not valid UTF-8"
+        ));
+    }
+    LRESULT index = SendMessageW(c->hwnd, CB_ADDSTRING, 0, (LPARAM)wt);
+    free(wt);
+    if (index < 0) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "combo_create",
+            "initial combo box item could not be added"
+        ));
+    }
+    SendMessageW(c->hwnd, CB_SETCURSEL, (WPARAM)index, 0);
+    return created;
+}
+
+bloom_enum_Result_i64_str bloom_desktop_list_create(
+    bloom_struct_std_desktop_Window window,
+    int64_t x,
+    int64_t y,
+    int64_t width,
+    int64_t height
+) {
+    bloom_str empty = {0, NULL, 0};
+    return bloom_desktop_create_control(
+        window,
+        empty,
+        x,
+        y,
+        width,
+        height,
+        L"LISTBOX",
+        LBS_NOTIFY | WS_VSCROLL | WS_BORDER | WS_TABSTOP,
+        6,
+        false,
+        "list_create"
     );
 }
 
@@ -1156,24 +1542,16 @@ bloom_enum_Result_str_str bloom_desktop_control_text(
     if (c == NULL) {
         return bloom_desktop_err_str(err);
     }
-    bool ok = false;
-    wchar_t *text = bloom_desktop_read_text(c->hwnd, &ok);
-    if (!ok) {
-        free(text);
-        return bloom_desktop_err_str(bloom_desktop_werr(
-            "control_text",
-            GetLastError()
-        ));
-    }
-    bloom_str s = bloom_desktop_from_utf16(text, (int)wcslen(text), &ok);
-    free(text);
-    if (!ok) {
+    if (c->kind == 6) {
         return bloom_desktop_err_str(bloom_desktop_msg(
             "control_text",
-            "control text is not valid Unicode"
+            "list boxes have no single text value; use list_selected_text"
         ));
     }
-    return bloom_desktop_ok_str(s);
+    return bloom_desktop_ok_str(bloom_desktop_get_control_text(
+        bloom_desktop_window_from(window),
+        c
+    ));
 }
 
 bloom_enum_Result_bool_str bloom_desktop_control_set_text(
@@ -1192,28 +1570,32 @@ bloom_enum_Result_bool_str bloom_desktop_control_set_text(
     if (c == NULL) {
         return bloom_desktop_err_bool(err);
     }
-    if (!bloom_desktop_text_ok(text)) {
+    if (c->kind == 4) {
         return bloom_desktop_err_bool(bloom_desktop_msg(
             "control_set_text",
-            "text exceeds 1048576 bytes or contains control/NUL bytes"
+            "use combo_set_selected to change a combo box"
         ));
     }
-    wchar_t *wt = bloom_desktop_to_utf16(text);
-    if (wt == NULL) {
+    if (c->kind == 6) {
         return bloom_desktop_err_bool(bloom_desktop_msg(
             "control_set_text",
-            "text is not valid UTF-8"
+            "use list_set_selected to change a list box"
+        ));
+    }
+    bool multiline = c->kind == 5;
+    if (multiline ? !bloom_desktop_area_text_ok(text) : !bloom_desktop_text_ok(text)) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "control_set_text",
+            multiline
+                ? "text exceeds 65536 bytes or contains invalid control/NUL bytes"
+                : "text exceeds 1048576 bytes or contains control/NUL bytes"
         ));
     }
     bloom_desktop_window *w = bloom_desktop_window_from(window);
-    w->suppress_events++;
-    BOOL ok = SetWindowTextW(c->hwnd, wt);
-    w->suppress_events--;
-    free(wt);
-    if (!ok) {
-        return bloom_desktop_err_bool(bloom_desktop_werr(
+    if (!bloom_desktop_set_control_text(w, c, text)) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
             "control_set_text",
-            GetLastError()
+            "text is not valid UTF-8 or is too long for this control"
         ));
     }
     return bloom_desktop_ok_bool();
@@ -1453,6 +1835,1525 @@ bloom_enum_Result_bool_str bloom_desktop_control_focus(
     return bloom_desktop_ok_bool();
 }
 
+/* ---- public: combo boxes and list boxes ------------------------------- */
+
+static bloom_enum_Result_i64_str bloom_desktop_list_value(
+    int64_t value,
+    const char *op
+) {
+    (void)op;
+    return bloom_desktop_ok_i64(value);
+}
+
+bloom_enum_Result_i64_str bloom_desktop_combo_add(
+    bloom_struct_std_desktop_Window window,
+    int64_t control,
+    bloom_str text
+) {
+    bloom_str err = {0, NULL, 0};
+    bloom_desktop_control *c = bloom_desktop_control_for(
+        window,
+        control,
+        4,
+        "combo_add",
+        &err
+    );
+    if (c == NULL) {
+        return bloom_desktop_err_i64(err);
+    }
+    if (!bloom_desktop_text_ok(text)) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "combo_add",
+            "text exceeds 1048576 bytes or contains control/NUL bytes"
+        ));
+    }
+    wchar_t *wt = bloom_desktop_to_utf16(text);
+    if (wt == NULL) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "combo_add",
+            "text is not valid UTF-8"
+        ));
+    }
+    LRESULT index = SendMessageW(c->hwnd, CB_ADDSTRING, 0, (LPARAM)wt);
+    free(wt);
+    if (index < 0) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "combo_add",
+            "item could not be added"
+        ));
+    }
+    return bloom_desktop_list_value((int64_t)index, "combo_add");
+}
+
+bloom_enum_Result_bool_str bloom_desktop_combo_remove(
+    bloom_struct_std_desktop_Window window,
+    int64_t control,
+    int64_t index
+) {
+    bloom_str err = {0, NULL, 0};
+    bloom_desktop_control *c = bloom_desktop_control_for(
+        window,
+        control,
+        4,
+        "combo_remove",
+        &err
+    );
+    if (c == NULL) {
+        return bloom_desktop_err_bool(err);
+    }
+    int count = (int)SendMessageW(c->hwnd, CB_GETCOUNT, 0, 0);
+    if (index < 0 || index >= count) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "combo_remove",
+            "index is out of range"
+        ));
+    }
+    if (SendMessageW(c->hwnd, CB_DELETESTRING, (WPARAM)index, 0) == CB_ERR) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "combo_remove",
+            "item could not be removed"
+        ));
+    }
+    return bloom_desktop_ok_bool();
+}
+
+bloom_enum_Result_bool_str bloom_desktop_combo_clear(
+    bloom_struct_std_desktop_Window window,
+    int64_t control
+) {
+    bloom_str err = {0, NULL, 0};
+    bloom_desktop_control *c = bloom_desktop_control_for(
+        window,
+        control,
+        4,
+        "combo_clear",
+        &err
+    );
+    if (c == NULL) {
+        return bloom_desktop_err_bool(err);
+    }
+    SendMessageW(c->hwnd, CB_RESETCONTENT, 0, 0);
+    return bloom_desktop_ok_bool();
+}
+
+bloom_enum_Result_i64_str bloom_desktop_combo_count(
+    bloom_struct_std_desktop_Window window,
+    int64_t control
+) {
+    bloom_str err = {0, NULL, 0};
+    bloom_desktop_control *c = bloom_desktop_control_for(
+        window,
+        control,
+        4,
+        "combo_count",
+        &err
+    );
+    if (c == NULL) {
+        return bloom_desktop_err_i64(err);
+    }
+    return bloom_desktop_list_value(
+        (int64_t)SendMessageW(c->hwnd, CB_GETCOUNT, 0, 0),
+        "combo_count"
+    );
+}
+
+bloom_enum_Result_i64_str bloom_desktop_combo_selected(
+    bloom_struct_std_desktop_Window window,
+    int64_t control
+) {
+    bloom_str err = {0, NULL, 0};
+    bloom_desktop_control *c = bloom_desktop_control_for(
+        window,
+        control,
+        4,
+        "combo_selected",
+        &err
+    );
+    if (c == NULL) {
+        return bloom_desktop_err_i64(err);
+    }
+    return bloom_desktop_list_value(
+        (int64_t)SendMessageW(c->hwnd, CB_GETCURSEL, 0, 0),
+        "combo_selected"
+    );
+}
+
+bloom_enum_Result_bool_str bloom_desktop_combo_set_selected(
+    bloom_struct_std_desktop_Window window,
+    int64_t control,
+    int64_t index
+) {
+    bloom_str err = {0, NULL, 0};
+    bloom_desktop_control *c = bloom_desktop_control_for(
+        window,
+        control,
+        4,
+        "combo_set_selected",
+        &err
+    );
+    if (c == NULL) {
+        return bloom_desktop_err_bool(err);
+    }
+    int count = (int)SendMessageW(c->hwnd, CB_GETCOUNT, 0, 0);
+    if (index < -1 || index >= count) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "combo_set_selected",
+            "index is out of range"
+        ));
+    }
+    if (SendMessageW(c->hwnd, CB_SETCURSEL, (WPARAM)index, 0) == CB_ERR
+        && index >= 0) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "combo_set_selected",
+            "selection could not be changed"
+        ));
+    }
+    return bloom_desktop_ok_bool();
+}
+
+bloom_enum_Result_str_str bloom_desktop_combo_selected_text(
+    bloom_struct_std_desktop_Window window,
+    int64_t control
+) {
+    bloom_str err = {0, NULL, 0};
+    bloom_desktop_control *c = bloom_desktop_control_for(
+        window,
+        control,
+        4,
+        "combo_selected_text",
+        &err
+    );
+    if (c == NULL) {
+        return bloom_desktop_err_str(err);
+    }
+    bool ok = false;
+    bloom_str s = bloom_desktop_selected_text(c->hwnd, 4, &ok);
+    if (!ok) {
+        bloom_str_drop(&s);
+        return bloom_desktop_err_str(bloom_desktop_msg(
+            "combo_selected_text",
+            "selected text is too long or not valid Unicode"
+        ));
+    }
+    return bloom_desktop_ok_str(s);
+}
+
+bloom_enum_Result_i64_str bloom_desktop_list_add(
+    bloom_struct_std_desktop_Window window,
+    int64_t control,
+    bloom_str text
+) {
+    bloom_str err = {0, NULL, 0};
+    bloom_desktop_control *c = bloom_desktop_control_for(
+        window,
+        control,
+        6,
+        "list_add",
+        &err
+    );
+    if (c == NULL) {
+        return bloom_desktop_err_i64(err);
+    }
+    if (!bloom_desktop_text_ok(text)) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "list_add",
+            "text exceeds 1048576 bytes or contains control/NUL bytes"
+        ));
+    }
+    wchar_t *wt = bloom_desktop_to_utf16(text);
+    if (wt == NULL) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "list_add",
+            "text is not valid UTF-8"
+        ));
+    }
+    LRESULT index = SendMessageW(c->hwnd, LB_ADDSTRING, 0, (LPARAM)wt);
+    free(wt);
+    if (index < 0) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "list_add",
+            "item could not be added"
+        ));
+    }
+    return bloom_desktop_list_value((int64_t)index, "list_add");
+}
+
+bloom_enum_Result_bool_str bloom_desktop_list_remove(
+    bloom_struct_std_desktop_Window window,
+    int64_t control,
+    int64_t index
+) {
+    bloom_str err = {0, NULL, 0};
+    bloom_desktop_control *c = bloom_desktop_control_for(
+        window,
+        control,
+        6,
+        "list_remove",
+        &err
+    );
+    if (c == NULL) {
+        return bloom_desktop_err_bool(err);
+    }
+    int count = (int)SendMessageW(c->hwnd, LB_GETCOUNT, 0, 0);
+    if (index < 0 || index >= count) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "list_remove",
+            "index is out of range"
+        ));
+    }
+    if (SendMessageW(c->hwnd, LB_DELETESTRING, (WPARAM)index, 0) == LB_ERR) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "list_remove",
+            "item could not be removed"
+        ));
+    }
+    return bloom_desktop_ok_bool();
+}
+
+bloom_enum_Result_bool_str bloom_desktop_list_clear(
+    bloom_struct_std_desktop_Window window,
+    int64_t control
+) {
+    bloom_str err = {0, NULL, 0};
+    bloom_desktop_control *c = bloom_desktop_control_for(
+        window,
+        control,
+        6,
+        "list_clear",
+        &err
+    );
+    if (c == NULL) {
+        return bloom_desktop_err_bool(err);
+    }
+    SendMessageW(c->hwnd, LB_RESETCONTENT, 0, 0);
+    return bloom_desktop_ok_bool();
+}
+
+bloom_enum_Result_i64_str bloom_desktop_list_count(
+    bloom_struct_std_desktop_Window window,
+    int64_t control
+) {
+    bloom_str err = {0, NULL, 0};
+    bloom_desktop_control *c = bloom_desktop_control_for(
+        window,
+        control,
+        6,
+        "list_count",
+        &err
+    );
+    if (c == NULL) {
+        return bloom_desktop_err_i64(err);
+    }
+    return bloom_desktop_list_value(
+        (int64_t)SendMessageW(c->hwnd, LB_GETCOUNT, 0, 0),
+        "list_count"
+    );
+}
+
+bloom_enum_Result_i64_str bloom_desktop_list_selected(
+    bloom_struct_std_desktop_Window window,
+    int64_t control
+) {
+    bloom_str err = {0, NULL, 0};
+    bloom_desktop_control *c = bloom_desktop_control_for(
+        window,
+        control,
+        6,
+        "list_selected",
+        &err
+    );
+    if (c == NULL) {
+        return bloom_desktop_err_i64(err);
+    }
+    return bloom_desktop_list_value(
+        (int64_t)SendMessageW(c->hwnd, LB_GETCURSEL, 0, 0),
+        "list_selected"
+    );
+}
+
+bloom_enum_Result_bool_str bloom_desktop_list_set_selected(
+    bloom_struct_std_desktop_Window window,
+    int64_t control,
+    int64_t index
+) {
+    bloom_str err = {0, NULL, 0};
+    bloom_desktop_control *c = bloom_desktop_control_for(
+        window,
+        control,
+        6,
+        "list_set_selected",
+        &err
+    );
+    if (c == NULL) {
+        return bloom_desktop_err_bool(err);
+    }
+    int count = (int)SendMessageW(c->hwnd, LB_GETCOUNT, 0, 0);
+    if (index < -1 || index >= count) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "list_set_selected",
+            "index is out of range"
+        ));
+    }
+    if (SendMessageW(c->hwnd, LB_SETCURSEL, (WPARAM)index, 0) == LB_ERR
+        && index >= 0) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "list_set_selected",
+            "selection could not be changed"
+        ));
+    }
+    return bloom_desktop_ok_bool();
+}
+
+bloom_enum_Result_str_str bloom_desktop_list_selected_text(
+    bloom_struct_std_desktop_Window window,
+    int64_t control
+) {
+    bloom_str err = {0, NULL, 0};
+    bloom_desktop_control *c = bloom_desktop_control_for(
+        window,
+        control,
+        6,
+        "list_selected_text",
+        &err
+    );
+    if (c == NULL) {
+        return bloom_desktop_err_str(err);
+    }
+    bool ok = false;
+    bloom_str s = bloom_desktop_selected_text(c->hwnd, 6, &ok);
+    if (!ok) {
+        bloom_str_drop(&s);
+        return bloom_desktop_err_str(bloom_desktop_msg(
+            "list_selected_text",
+            "selected text is too long or not valid Unicode"
+        ));
+    }
+    return bloom_desktop_ok_str(s);
+}
+
+bloom_enum_Result_i64_str bloom_desktop_events_dropped(
+    bloom_struct_std_desktop_Window window
+) {
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    if (w == NULL) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "events_dropped",
+            "invalid window handle"
+        ));
+    }
+    if (!bloom_desktop_thread_ok(w)) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "events_dropped",
+            "desktop calls must run on the window's thread"
+        ));
+    }
+    return bloom_desktop_ok_i64(w->dropped_events);
+}
+
+/* ---- public: menus ---------------------------------------------------- */
+
+static bloom_desktop_menu_entry *bloom_desktop_menu_entry_for(
+    bloom_desktop_window *w,
+    int64_t id
+) {
+    for (int i = 0; i < w->menu_count; i++) {
+        if (w->menu_entries[i].id == id) {
+            return &w->menu_entries[i];
+        }
+    }
+    return NULL;
+}
+
+static HMENU bloom_desktop_menu_parent(bloom_desktop_window *w, int64_t parent_id) {
+    if (parent_id == 0) {
+        return w->menu;
+    }
+    bloom_desktop_menu_entry *entry = bloom_desktop_menu_entry_for(w, parent_id);
+    if (entry == NULL || !entry->submenu) {
+        return NULL;
+    }
+    return GetSubMenu(w->menu, entry->position);
+}
+
+bloom_enum_Result_bool_str bloom_desktop_menu_create(
+    bloom_struct_std_desktop_Window window
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, "menu_create", &err)) {
+        return bloom_desktop_err_bool(err);
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    if (w->menu != NULL) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "menu_create",
+            "window already has a menu bar"
+        ));
+    }
+    HMENU menu = CreateMenu();
+    if (menu == NULL) {
+        return bloom_desktop_err_bool(bloom_desktop_werr(
+            "menu_create",
+            GetLastError()
+        ));
+    }
+    if (!SetMenu(w->hwnd, menu)) {
+        DestroyMenu(menu);
+        return bloom_desktop_err_bool(bloom_desktop_werr(
+            "menu_create",
+            GetLastError()
+        ));
+    }
+    w->menu = menu;
+    w->next_menu_id = BLOOM_DESKTOP_MENU_ID_BASE;
+    return bloom_desktop_ok_bool();
+}
+
+bloom_enum_Result_i64_str bloom_desktop_menu_add(
+    bloom_struct_std_desktop_Window window,
+    bloom_str label
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, "menu_add", &err)) {
+        return bloom_desktop_err_i64(err);
+    }
+    if (!bloom_desktop_text_ok(label)) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "menu_add",
+            "label exceeds 1048576 bytes or contains control/NUL bytes"
+        ));
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    if (w->menu == NULL) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "menu_add",
+            "create a menu bar with menu_create first"
+        ));
+    }
+    if (w->menu_count >= BLOOM_DESKTOP_MAX_MENU_ITEMS
+        || w->next_menu_id >= BLOOM_DESKTOP_LAYOUT_ID_BASE) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "menu_add",
+            "too many menu entries (max 128)"
+        ));
+    }
+    wchar_t *wt = bloom_desktop_to_utf16(label);
+    if (wt == NULL) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "menu_add",
+            "label is not valid UTF-8"
+        ));
+    }
+    HMENU submenu = CreatePopupMenu();
+    if (submenu == NULL) {
+        free(wt);
+        return bloom_desktop_err_i64(bloom_desktop_werr(
+            "menu_add",
+            GetLastError()
+        ));
+    }
+    int position = GetMenuItemCount(w->menu);
+    if (position < 0 || !AppendMenuW(
+            w->menu,
+            MF_STRING | MF_POPUP,
+            (UINT_PTR)submenu,
+            wt
+        )) {
+        free(wt);
+        DestroyMenu(submenu);
+        return bloom_desktop_err_i64(bloom_desktop_werr(
+            "menu_add",
+            GetLastError()
+        ));
+    }
+    free(wt);
+    int64_t id = w->next_menu_id++;
+    bloom_desktop_menu_entry *entry = &w->menu_entries[w->menu_count++];
+    entry->id = id;
+    entry->parent_id = 0;
+    entry->position = position;
+    entry->submenu = true;
+    entry->label = bloom_str_clone(label);
+    return bloom_desktop_ok_i64(id);
+}
+
+bloom_enum_Result_i64_str bloom_desktop_menu_item(
+    bloom_struct_std_desktop_Window window,
+    int64_t menu_id,
+    bloom_str label
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, "menu_item", &err)) {
+        return bloom_desktop_err_i64(err);
+    }
+    if (!bloom_desktop_text_ok(label)) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "menu_item",
+            "label exceeds 1048576 bytes or contains control/NUL bytes"
+        ));
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    if (w->menu == NULL) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "menu_item",
+            "window has no menu bar"
+        ));
+    }
+    bloom_desktop_menu_entry *parent = bloom_desktop_menu_entry_for(w, menu_id);
+    HMENU hmenu = bloom_desktop_menu_parent(w, menu_id);
+    if (parent == NULL || !parent->submenu || hmenu == NULL) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "menu_item",
+            "menu_id must refer to a popup menu created with menu_add"
+        ));
+    }
+    if (w->menu_count >= BLOOM_DESKTOP_MAX_MENU_ITEMS
+        || w->next_menu_id >= BLOOM_DESKTOP_LAYOUT_ID_BASE) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "menu_item",
+            "too many menu entries (max 128)"
+        ));
+    }
+    wchar_t *wt = bloom_desktop_to_utf16(label);
+    if (wt == NULL) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "menu_item",
+            "label is not valid UTF-8"
+        ));
+    }
+    int position = GetMenuItemCount(hmenu);
+    int64_t id = w->next_menu_id++;
+    if (position < 0 || !AppendMenuW(hmenu, MF_STRING, (UINT_PTR)id, wt)) {
+        free(wt);
+        return bloom_desktop_err_i64(bloom_desktop_werr(
+            "menu_item",
+            GetLastError()
+        ));
+    }
+    free(wt);
+    bloom_desktop_menu_entry *entry = &w->menu_entries[w->menu_count++];
+    entry->id = id;
+    entry->parent_id = menu_id;
+    entry->position = position;
+    entry->submenu = false;
+    entry->label = bloom_str_clone(label);
+    return bloom_desktop_ok_i64(id);
+}
+
+bloom_enum_Result_bool_str bloom_desktop_menu_separator(
+    bloom_struct_std_desktop_Window window,
+    int64_t menu_id
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, "menu_separator", &err)) {
+        return bloom_desktop_err_bool(err);
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    bloom_desktop_menu_entry *parent = bloom_desktop_menu_entry_for(w, menu_id);
+    HMENU hmenu = bloom_desktop_menu_parent(w, menu_id);
+    if (parent == NULL || !parent->submenu || hmenu == NULL) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "menu_separator",
+            "menu_id must refer to a popup menu created with menu_add"
+        ));
+    }
+    if (!AppendMenuW(hmenu, MF_SEPARATOR, 0, NULL)) {
+        return bloom_desktop_err_bool(bloom_desktop_werr(
+            "menu_separator",
+            GetLastError()
+        ));
+    }
+    return bloom_desktop_ok_bool();
+}
+
+bloom_enum_Result_bool_str bloom_desktop_menu_set_enabled(
+    bloom_struct_std_desktop_Window window,
+    int64_t item_id,
+    bool enabled
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, "menu_set_enabled", &err)) {
+        return bloom_desktop_err_bool(err);
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    bloom_desktop_menu_entry *entry = bloom_desktop_menu_entry_for(w, item_id);
+    if (entry == NULL) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "menu_set_enabled",
+            "unknown menu id"
+        ));
+    }
+    HMENU hmenu = bloom_desktop_menu_parent(w, entry->parent_id);
+    if (hmenu == NULL) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "menu_set_enabled",
+            "menu is not available"
+        ));
+    }
+    UINT flags = MF_BYPOSITION | (enabled ? MF_ENABLED : MF_GRAYED);
+    if (EnableMenuItem(hmenu, (UINT)entry->position, flags) == (UINT)-1) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "menu_set_enabled",
+            "menu item could not be changed"
+        ));
+    }
+    DrawMenuBar(w->hwnd);
+    return bloom_desktop_ok_bool();
+}
+
+/* ---- public: layout --------------------------------------------------- */
+
+static bloom_desktop_layout *bloom_desktop_layout_for(
+    bloom_desktop_window *w,
+    int64_t id
+) {
+    for (int i = 0; i < w->layout_count; i++) {
+        if (w->layouts[i].id == id) {
+            return &w->layouts[i];
+        }
+    }
+    return NULL;
+}
+
+static bool bloom_desktop_align_ok(bloom_str align, int *value) {
+    if (align.len == 5 && memcmp(align.data, "start", 5) == 0) {
+        *value = 0;
+        return true;
+    }
+    if (align.len == 6 && memcmp(align.data, "center", 6) == 0) {
+        *value = 1;
+        return true;
+    }
+    if (align.len == 3 && memcmp(align.data, "end", 3) == 0) {
+        *value = 2;
+        return true;
+    }
+    if (align.len == 7 && memcmp(align.data, "stretch", 7) == 0) {
+        *value = 3;
+        return true;
+    }
+    return false;
+}
+
+static int64_t bloom_desktop_clamp_i32(int64_t value) {
+    if (value > 2147483647LL) {
+        return 2147483647LL;
+    }
+    if (value < -2147483648LL) {
+        return -2147483648LL;
+    }
+    return value;
+}
+
+static int bloom_desktop_scale(int64_t logical, int dpi) {
+    int64_t value = (logical * (int64_t)dpi + 48) / 96;
+    return (int)bloom_desktop_clamp_i32(value);
+}
+
+bloom_enum_Result_i64_str bloom_desktop_layout_create(
+    bloom_struct_std_desktop_Window window,
+    bloom_str kind
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, "layout_create", &err)) {
+        return bloom_desktop_err_i64(err);
+    }
+    int value = -1;
+    if (kind.len == 3 && memcmp(kind.data, "row", 3) == 0) {
+        value = 0;
+    } else if (kind.len == 6 && memcmp(kind.data, "column", 6) == 0) {
+        value = 1;
+    }
+    if (value < 0) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "layout_create",
+            "kind must be \"row\" or \"column\""
+        ));
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    if (w->layout_count >= BLOOM_DESKTOP_MAX_LAYOUTS) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "layout_create",
+            "too many layouts (max 64)"
+        ));
+    }
+    bloom_desktop_layout *layout = &w->layouts[w->layout_count++];
+    memset(layout, 0, sizeof *layout);
+    layout->id = w->next_layout_id++;
+    layout->kind = value;
+    layout->align = 0;
+    return bloom_desktop_ok_i64(layout->id);
+}
+
+static bloom_enum_Result_bool_str bloom_desktop_layout_spacing(
+    bloom_struct_std_desktop_Window window,
+    int64_t layout_id,
+    int64_t value,
+    int which,
+    const char *op
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, op, &err)) {
+        return bloom_desktop_err_bool(err);
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    bloom_desktop_layout *layout = bloom_desktop_layout_for(w, layout_id);
+    if (layout == NULL) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(op, "unknown layout id"));
+    }
+    if (value < 0 || value > 4096) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            op,
+            "value must be between 0 and 4096 logical units"
+        ));
+    }
+    if (which == 0) {
+        layout->padding = value;
+    } else {
+        layout->spacing = value;
+    }
+    w->layout_dirty = true;
+    if (w->root_layout != 0) {
+        bloom_desktop_layout_apply(w);
+    }
+    return bloom_desktop_ok_bool();
+}
+
+bloom_enum_Result_bool_str bloom_desktop_layout_set_padding(
+    bloom_struct_std_desktop_Window window,
+    int64_t layout_id,
+    int64_t padding
+) {
+    return bloom_desktop_layout_spacing(
+        window,
+        layout_id,
+        padding,
+        0,
+        "layout_set_padding"
+    );
+}
+
+bloom_enum_Result_bool_str bloom_desktop_layout_set_spacing(
+    bloom_struct_std_desktop_Window window,
+    int64_t layout_id,
+    int64_t spacing
+) {
+    return bloom_desktop_layout_spacing(
+        window,
+        layout_id,
+        spacing,
+        1,
+        "layout_set_spacing"
+    );
+}
+
+bloom_enum_Result_bool_str bloom_desktop_layout_set_align(
+    bloom_struct_std_desktop_Window window,
+    int64_t layout_id,
+    bloom_str align
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, "layout_set_align", &err)) {
+        return bloom_desktop_err_bool(err);
+    }
+    int value = 0;
+    if (!bloom_desktop_align_ok(align, &value)) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_set_align",
+            "align must be start, center, end or stretch"
+        ));
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    bloom_desktop_layout *layout = bloom_desktop_layout_for(w, layout_id);
+    if (layout == NULL) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_set_align",
+            "unknown layout id"
+        ));
+    }
+    layout->align = value;
+    w->layout_dirty = true;
+    if (w->root_layout != 0) {
+        bloom_desktop_layout_apply(w);
+    }
+    return bloom_desktop_ok_bool();
+}
+
+bloom_enum_Result_bool_str bloom_desktop_layout_add_control(
+    bloom_struct_std_desktop_Window window,
+    int64_t layout_id,
+    int64_t control,
+    bloom_struct_std_desktop_LayoutItem item
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, "layout_add_control", &err)) {
+        return bloom_desktop_err_bool(err);
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    bloom_desktop_layout *layout = bloom_desktop_layout_for(w, layout_id);
+    if (layout == NULL) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_add_control",
+            "unknown layout id"
+        ));
+    }
+    if (bloom_desktop_find_control(w, control) == NULL) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_add_control",
+            "unknown control id"
+        ));
+    }
+    if (item.f_flex < 0 || item.f_flex > 1000) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_add_control",
+            "flex must be between 0 and 1000"
+        ));
+    }
+    if (item.f_width < 0 || item.f_width > 16384 || item.f_height < 0
+        || item.f_height > 16384) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_add_control",
+            "width and height must be between 0 and 16384"
+        ));
+    }
+    int align = -1;
+    if (item.f_align.len > 0 && !bloom_desktop_align_ok(item.f_align, &align)) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_add_control",
+            "align must be start, center, end, stretch or empty"
+        ));
+    }
+    if (layout->child_count >= BLOOM_DESKTOP_MAX_LAYOUT_CHILDREN) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_add_control",
+            "too many children in layout (max 256)"
+        ));
+    }
+    if (layout->child_count == layout->child_cap) {
+        int cap = layout->child_cap ? layout->child_cap * 2 : 4;
+        if (cap > BLOOM_DESKTOP_MAX_LAYOUT_CHILDREN) {
+            cap = BLOOM_DESKTOP_MAX_LAYOUT_CHILDREN;
+        }
+        bloom_desktop_layout_child *grown = (bloom_desktop_layout_child *)realloc(
+            layout->children,
+            (size_t)cap * sizeof *grown
+        );
+        if (grown == NULL) {
+            bloom_panicf(NULL, 0, "out of memory");
+        }
+        layout->children = grown;
+        layout->child_cap = cap;
+    }
+    bloom_desktop_layout_child *child = &layout->children[layout->child_count++];
+    child->type = 0;
+    child->control = control;
+    child->layout_id = 0;
+    child->width = item.f_width;
+    child->height = item.f_height;
+    child->flex = item.f_flex;
+    child->align = align;
+    w->layout_dirty = true;
+    if (w->root_layout != 0) {
+        bloom_desktop_layout_apply(w);
+    }
+    return bloom_desktop_ok_bool();
+}
+
+bloom_enum_Result_bool_str bloom_desktop_layout_add_layout(
+    bloom_struct_std_desktop_Window window,
+    int64_t parent_id,
+    int64_t child_id,
+    bloom_struct_std_desktop_LayoutItem item
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, "layout_add_layout", &err)) {
+        return bloom_desktop_err_bool(err);
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    bloom_desktop_layout *parent = bloom_desktop_layout_for(w, parent_id);
+    bloom_desktop_layout *child = bloom_desktop_layout_for(w, child_id);
+    if (parent == NULL || child == NULL) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_add_layout",
+            "unknown layout id"
+        ));
+    }
+    if (item.f_flex < 0 || item.f_flex > 1000) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_add_layout",
+            "flex must be between 0 and 1000"
+        ));
+    }
+    if (item.f_width < 0 || item.f_width > 16384 || item.f_height < 0
+        || item.f_height > 16384) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_add_layout",
+            "width and height must be between 0 and 16384"
+        ));
+    }
+    int align = -1;
+    if (item.f_align.len > 0 && !bloom_desktop_align_ok(item.f_align, &align)) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_add_layout",
+            "align must be start, center, end, stretch or empty"
+        ));
+    }
+    if (child->parent_id != 0) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_add_layout",
+            "layout is already attached"
+        ));
+    }
+    if (parent->child_count >= BLOOM_DESKTOP_MAX_LAYOUT_CHILDREN) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_add_layout",
+            "too many children in layout (max 256)"
+        ));
+    }
+    int depth = 1;
+    for (bloom_desktop_layout *walk = parent; walk->parent_id != 0; ) {
+        walk = bloom_desktop_layout_for(w, walk->parent_id);
+        if (walk == NULL) {
+            break;
+        }
+        depth++;
+    }
+    if (depth > BLOOM_DESKTOP_MAX_LAYOUT_DEPTH) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_add_layout",
+            "layout nesting is too deep (max 32)"
+        ));
+    }
+    if (parent->child_count == parent->child_cap) {
+        int cap = parent->child_cap ? parent->child_cap * 2 : 4;
+        if (cap > BLOOM_DESKTOP_MAX_LAYOUT_CHILDREN) {
+            cap = BLOOM_DESKTOP_MAX_LAYOUT_CHILDREN;
+        }
+        bloom_desktop_layout_child *grown = (bloom_desktop_layout_child *)realloc(
+            parent->children,
+            (size_t)cap * sizeof *grown
+        );
+        if (grown == NULL) {
+            bloom_panicf(NULL, 0, "out of memory");
+        }
+        parent->children = grown;
+        parent->child_cap = cap;
+    }
+    bloom_desktop_layout_child *slot = &parent->children[parent->child_count++];
+    slot->type = 1;
+    slot->control = 0;
+    slot->layout_id = child_id;
+    slot->width = item.f_width;
+    slot->height = item.f_height;
+    slot->flex = item.f_flex;
+    slot->align = align;
+    child->parent_id = parent_id;
+    w->layout_dirty = true;
+    if (w->root_layout != 0) {
+        bloom_desktop_layout_apply(w);
+    }
+    return bloom_desktop_ok_bool();
+}
+
+static bool bloom_desktop_layout_place(
+    bloom_desktop_window *w,
+    bloom_desktop_layout *layout,
+    int64_t x,
+    int64_t y,
+    int64_t width,
+    int64_t height,
+    int depth,
+    int *nodes
+) {
+    if (depth > BLOOM_DESKTOP_MAX_LAYOUT_DEPTH || *nodes > BLOOM_DESKTOP_MAX_LAYOUT_NODES) {
+        return false;
+    }
+    (*nodes)++;
+    int64_t pad = layout->padding;
+    if (pad * 2 >= width || pad * 2 >= height) {
+        pad = 0;
+    }
+    int64_t inner_x = x + pad;
+    int64_t inner_y = y + pad;
+    int64_t inner_w = width - pad * 2;
+    int64_t inner_h = height - pad * 2;
+    if (inner_w < 0) {
+        inner_w = 0;
+    }
+    if (inner_h < 0) {
+        inner_h = 0;
+    }
+    bool row = layout->kind == 0;
+    int64_t main_size = row ? inner_w : inner_h;
+    int64_t cross_size = row ? inner_h : inner_w;
+    int count = layout->child_count;
+    int64_t spacing = layout->spacing;
+    int64_t total_spacing = count > 1 ? spacing * (count - 1) : 0;
+    if (total_spacing > main_size) {
+        total_spacing = main_size;
+    }
+    int64_t available = main_size - total_spacing;
+    if (available < 0) {
+        available = 0;
+    }
+    int64_t fixed_total = 0;
+    int64_t flex_total = 0;
+    for (int i = 0; i < count; i++) {
+        bloom_desktop_layout_child *ch = &layout->children[i];
+        int64_t fixed = row ? ch->width : ch->height;
+        if (fixed > 0) {
+            fixed_total += fixed;
+        } else if (ch->type == 1) {
+            flex_total += ch->flex > 0 ? ch->flex : 1;
+        } else {
+            flex_total += ch->flex > 0 ? ch->flex : 1;
+        }
+    }
+    int64_t flex_space = available - fixed_total;
+    if (flex_space < 0) {
+        flex_space = 0;
+    }
+    int64_t share = flex_total > 0 ? flex_space / flex_total : 0;
+    int64_t remainder = flex_total > 0 ? flex_space % flex_total : 0;
+    int64_t cursor = row ? inner_x : inner_y;
+    for (int i = 0; i < count; i++) {
+        bloom_desktop_layout_child *ch = &layout->children[i];
+        int64_t fixed_main = row ? ch->width : ch->height;
+        int64_t main = fixed_main;
+        if (main <= 0) {
+            int64_t weight = ch->flex > 0 ? ch->flex : 1;
+            main = share * weight;
+            if (remainder > 0) {
+                int64_t extra = remainder < weight ? remainder : weight;
+                main += extra;
+                remainder -= extra;
+            }
+        }
+        if (main < 0) {
+            main = 0;
+        }
+        int64_t fixed_cross = row ? ch->height : ch->width;
+        int align = ch->align >= 0 ? ch->align : layout->align;
+        int64_t cross = fixed_cross > 0 ? fixed_cross : cross_size;
+        int64_t cross_offset = 0;
+        if (cross >= cross_size) {
+            cross = cross_size;
+        } else if (align == 1) {
+            cross_offset = (cross_size - cross) / 2;
+        } else if (align == 2) {
+            cross_offset = cross_size - cross;
+        }
+        int64_t child_x = row ? cursor : inner_x + cross_offset;
+        int64_t child_y = row ? inner_y + cross_offset : cursor;
+        int64_t rect_w = row ? main : cross;
+        int64_t rect_h = row ? cross : main;
+        if (ch->type == 0) {
+            bloom_desktop_control *c = bloom_desktop_find_control(w, ch->control);
+            if (c != NULL) {
+                int px = bloom_desktop_scale(child_x, w->dpi);
+                int py = bloom_desktop_scale(child_y, w->dpi);
+                int pw = bloom_desktop_scale(rect_w < 1 ? 1 : rect_w, w->dpi);
+                int ph = bloom_desktop_scale(rect_h < 1 ? 1 : rect_h, w->dpi);
+                SetWindowPos(
+                    c->hwnd,
+                    NULL,
+                    px,
+                    py,
+                    pw,
+                    ph,
+                    SWP_NOZORDER | SWP_NOACTIVATE
+                );
+            }
+        } else {
+            bloom_desktop_layout *child_layout = bloom_desktop_layout_for(
+                w,
+                ch->layout_id
+            );
+            if (child_layout != NULL
+                && !bloom_desktop_layout_place(
+                    w,
+                    child_layout,
+                    child_x,
+                    child_y,
+                    rect_w,
+                    rect_h,
+                    depth + 1,
+                    nodes
+                )) {
+                return false;
+            }
+        }
+        cursor += main + spacing;
+    }
+    return true;
+}
+
+static bool bloom_desktop_layout_apply(bloom_desktop_window *w) {
+    w->layout_dirty = false;
+    if (w->root_layout == 0 || w->closed || w->hwnd == NULL) {
+        return true;
+    }
+    bloom_desktop_layout *root = bloom_desktop_layout_for(w, w->root_layout);
+    if (root == NULL) {
+        return false;
+    }
+    RECT rect;
+    if (!GetClientRect(w->hwnd, &rect)) {
+        return false;
+    }
+    w->dpi = (int)bloom_desktop_dpi_for(w->hwnd);
+    int64_t width = (int64_t)(rect.right - rect.left) * 96 / (w->dpi > 0 ? w->dpi : 96);
+    int64_t height = (int64_t)(rect.bottom - rect.top) * 96 / (w->dpi > 0 ? w->dpi : 96);
+    int nodes = 0;
+    return bloom_desktop_layout_place(w, root, 0, 0, width, height, 1, &nodes);
+}
+
+bloom_enum_Result_bool_str bloom_desktop_layout_attach(
+    bloom_struct_std_desktop_Window window,
+    int64_t layout_id
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, "layout_attach", &err)) {
+        return bloom_desktop_err_bool(err);
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    bloom_desktop_layout *layout = bloom_desktop_layout_for(w, layout_id);
+    if (layout == NULL) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_attach",
+            "unknown layout id"
+        ));
+    }
+    if (layout->parent_id != 0) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_attach",
+            "layout is nested; attach the root layout"
+        ));
+    }
+    w->root_layout = layout_id;
+    w->layout_dirty = true;
+    bloom_desktop_layout_apply(w);
+    return bloom_desktop_ok_bool();
+}
+
+bloom_enum_Result_bool_str bloom_desktop_layout_refresh(
+    bloom_struct_std_desktop_Window window
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, "layout_refresh", &err)) {
+        return bloom_desktop_err_bool(err);
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    w->layout_dirty = true;
+    if (!bloom_desktop_layout_apply(w)) {
+        return bloom_desktop_err_bool(bloom_desktop_msg(
+            "layout_refresh",
+            "layout could not be applied"
+        ));
+    }
+    return bloom_desktop_ok_bool();
+}
+
+bloom_enum_Result_bool_str bloom_desktop_layout_detach(
+    bloom_struct_std_desktop_Window window
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, "layout_detach", &err)) {
+        return bloom_desktop_err_bool(err);
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    w->root_layout = 0;
+    w->layout_dirty = false;
+    return bloom_desktop_ok_bool();
+}
+
+/* ---- public: keyboard focus and DPI helper ---------------------------- */
+
+bloom_enum_Result_i64_str bloom_desktop_focused_control(
+    bloom_struct_std_desktop_Window window
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, "focused_control", &err)) {
+        return bloom_desktop_err_i64(err);
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    HWND focus = GetFocus();
+    if (focus == NULL || GetAncestor(focus, GA_ROOT) != w->hwnd) {
+        return bloom_desktop_ok_i64(0);
+    }
+    for (int i = 0; i < w->control_count; i++) {
+        if (w->controls[i].hwnd == focus) {
+            return bloom_desktop_ok_i64(w->controls[i].id);
+        }
+    }
+    return bloom_desktop_ok_i64(0);
+}
+
+bloom_enum_Result_i64_str bloom_desktop_dpi_scale(
+    int64_t value,
+    int64_t dpi
+) {
+    if (value < -1000000 || value > 1000000) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "dpi_scale",
+            "value must be between -1000000 and 1000000"
+        ));
+    }
+    if (dpi < 48 || dpi > 960) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "dpi_scale",
+            "dpi must be between 48 and 960"
+        ));
+    }
+    bool negative = value < 0;
+    int64_t magnitude = negative ? -value : value;
+    int64_t scaled = (magnitude * dpi + 48) / 96;
+    return bloom_desktop_ok_i64(negative ? -scaled : scaled);
+}
+
+/* ---- public: file dialogs --------------------------------------------- */
+
+static wchar_t *bloom_desktop_file_filter(bloom_str filter) {
+    bloom_str source = filter;
+    if (filter.len == 0) {
+        source = bloom_str_from_bytes(
+            "Alle Dateien (*.*)|*.*|",
+            strlen("Alle Dateien (*.*)|*.*|")
+        );
+    }
+    wchar_t *wide = bloom_desktop_to_utf16(source);
+    if (filter.len == 0) {
+        bloom_str_drop(&source);
+    }
+    if (wide == NULL) {
+        return NULL;
+    }
+    for (wchar_t *p = wide; *p != L'\0'; p++) {
+        if (*p == L'|') {
+            *p = L'\0';
+        }
+    }
+    return wide;
+}
+
+static bloom_enum_Result_Option_str_str bloom_desktop_ok_path(bloom_str path) {
+    bloom_enum_Result_Option_str_str r;
+    r.tag = 0;
+    r.data.m_Ok._0.tag = 0;
+    r.data.m_Ok._0.data.m_Some._0 = path;
+    return r;
+}
+
+static bloom_enum_Result_Option_str_str bloom_desktop_cancel_path(void) {
+    bloom_enum_Result_Option_str_str r;
+    r.tag = 0;
+    r.data.m_Ok._0.tag = 1;
+    return r;
+}
+
+static bloom_enum_Result_Option_str_str bloom_desktop_err_path(bloom_str m) {
+    bloom_enum_Result_Option_str_str r;
+    r.tag = 1;
+    r.data.m_Err._0 = m;
+    return r;
+}
+
+static bloom_enum_Result_Option_str_str bloom_desktop_file_dialog(
+    bloom_struct_std_desktop_Window window,
+    bloom_str title,
+    bloom_str filter,
+    bloom_str default_name,
+    bool save,
+    const char *op
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, op, &err)) {
+        return bloom_desktop_err_path(err);
+    }
+    if (!bloom_desktop_text_ok(title)) {
+        return bloom_desktop_err_path(bloom_desktop_msg(
+            op,
+            "title exceeds 1048576 bytes or contains control/NUL bytes"
+        ));
+    }
+    if (filter.len > 4096) {
+        return bloom_desktop_err_path(bloom_desktop_msg(
+            op,
+            "filter exceeds 4096 bytes"
+        ));
+    }
+    if (!bloom_desktop_text_ok(default_name) || default_name.len > 4096) {
+        return bloom_desktop_err_path(bloom_desktop_msg(
+            op,
+            "default name exceeds 4096 bytes or contains control/NUL bytes"
+        ));
+    }
+    wchar_t *wt = bloom_desktop_to_utf16(title);
+    wchar_t *wf = bloom_desktop_file_filter(filter);
+    wchar_t *wn = bloom_desktop_to_utf16(default_name);
+    if (wt == NULL || wf == NULL || wn == NULL) {
+        free(wt);
+        free(wf);
+        free(wn);
+        return bloom_desktop_err_path(bloom_desktop_msg(
+            op,
+            "title, filter or default name is not valid UTF-8"
+        ));
+    }
+    wchar_t *buffer = (wchar_t *)calloc(32768, sizeof(wchar_t));
+    if (buffer == NULL) {
+        free(wt);
+        free(wf);
+        free(wn);
+        bloom_panicf(NULL, 0, "out of memory");
+    }
+    if (wcslen(wn) < 32767) {
+        wcscpy(buffer, wn);
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    OPENFILENAMEW ofn;
+    memset(&ofn, 0, sizeof ofn);
+    ofn.lStructSize = sizeof ofn;
+    ofn.hwndOwner = w->hwnd;
+    ofn.lpstrFilter = wf;
+    ofn.lpstrFile = buffer;
+    ofn.nMaxFile = 32768;
+    ofn.lpstrTitle = wt;
+    ofn.Flags = OFN_EXPLORER | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST;
+    if (save) {
+        ofn.Flags |= OFN_OVERWRITEPROMPT;
+    } else {
+        ofn.Flags |= OFN_FILEMUSTEXIST;
+    }
+    BOOL ok = save ? GetSaveFileNameW(&ofn) : GetOpenFileNameW(&ofn);
+    DWORD dialog_error = CommDlgExtendedError();
+    if (!ok) {
+        free(wt);
+        free(wf);
+        free(wn);
+        free(buffer);
+        if (dialog_error == 0) {
+            return bloom_desktop_cancel_path();
+        }
+        char detail[96];
+        snprintf(detail, sizeof detail, "dialog failed with code %lu", (unsigned long)dialog_error);
+        return bloom_desktop_err_path(bloom_desktop_msg(op, detail));
+    }
+    bool utf_ok = false;
+    bloom_str path = bloom_desktop_from_utf16(buffer, (int)wcslen(buffer), &utf_ok);
+    free(wt);
+    free(wf);
+    free(wn);
+    free(buffer);
+    if (!utf_ok) {
+        bloom_str_drop(&path);
+        return bloom_desktop_err_path(bloom_desktop_msg(
+            op,
+            "selected path is not valid Unicode"
+        ));
+    }
+    return bloom_desktop_ok_path(path);
+}
+
+bloom_enum_Result_Option_str_str bloom_desktop_open_file_dialog(
+    bloom_struct_std_desktop_Window window,
+    bloom_str title,
+    bloom_str filter
+) {
+    bloom_str empty = {0, NULL, 0};
+    return bloom_desktop_file_dialog(
+        window,
+        title,
+        filter,
+        empty,
+        false,
+        "open_file_dialog"
+    );
+}
+
+bloom_enum_Result_Option_str_str bloom_desktop_save_file_dialog(
+    bloom_struct_std_desktop_Window window,
+    bloom_str title,
+    bloom_str filter,
+    bloom_str default_name
+) {
+    return bloom_desktop_file_dialog(
+        window,
+        title,
+        filter,
+        default_name,
+        true,
+        "save_file_dialog"
+    );
+}
+
+/* ---- public: internal test hooks -------------------------------------- */
+
+bloom_enum_Result_i64_str bloom_desktop_debug_event_flood(
+    bloom_struct_std_desktop_Window window,
+    int64_t count
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, "debug_event_flood", &err)) {
+        return bloom_desktop_err_i64(err);
+    }
+    if (count < 0 || count > 10000) {
+        return bloom_desktop_err_i64(bloom_desktop_msg(
+            "debug_event_flood",
+            "count must be between 0 and 10000"
+        ));
+    }
+    bloom_desktop_window *w = bloom_desktop_window_from(window);
+    int before = w->dropped_events;
+    for (int64_t i = 0; i < count; i++) {
+        bloom_desktop_push_event(w, 0, 0, bloom_str_from_bytes("", 0), false);
+    }
+    return bloom_desktop_ok_i64(w->dropped_events - before);
+}
+
+typedef struct {
+    bloom_desktop_window *window;
+    bool rejected;
+} bloom_desktop_thread_probe;
+
+static DWORD WINAPI bloom_desktop_thread_probe_main(LPVOID param) {
+    bloom_desktop_thread_probe *probe = (bloom_desktop_thread_probe *)param;
+    bloom_struct_std_desktop_Window h;
+    h.f_id = (bloom_desktop_window_handle)(intptr_t)probe->window;
+    bloom_str err = {0, NULL, 0};
+    probe->rejected = !bloom_desktop_prepare(h, "debug_cross_thread", &err);
+    bloom_str_drop(&err);
+    return 0;
+}
+
+bloom_enum_Result_bool_str bloom_desktop_debug_cross_thread(
+    bloom_struct_std_desktop_Window window
+) {
+    bloom_str err = {0, NULL, 0};
+    if (!bloom_desktop_prepare(window, "debug_cross_thread", &err)) {
+        return bloom_desktop_err_bool(err);
+    }
+    bloom_desktop_thread_probe probe;
+    probe.window = bloom_desktop_window_from(window);
+    probe.rejected = false;
+    HANDLE thread = CreateThread(
+        NULL,
+        0,
+        bloom_desktop_thread_probe_main,
+        &probe,
+        0,
+        NULL
+    );
+    if (thread == NULL) {
+        return bloom_desktop_err_bool(bloom_desktop_werr(
+            "debug_cross_thread",
+            GetLastError()
+        ));
+    }
+    WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
+    return bloom_desktop_ok_bool_value(probe.rejected);
+}
+
 /* ---- public: events --------------------------------------------------- */
 
 bloom_enum_Result_std_desktop_Event_str bloom_desktop_next_event(
@@ -1476,9 +3377,21 @@ bloom_enum_Result_std_desktop_Event_str bloom_desktop_next_event(
     }
     while (w->event_count == 0) {
         if (w->closed) {
+            if (!w->close_delivered) {
+                w->close_delivered = true;
+                r.tag = 0;
+                r.data.m_Ok._0.f_kind = bloom_str_from_bytes("close", 5);
+                r.data.m_Ok._0.f_control = 0;
+                r.data.m_Ok._0.f_text = bloom_str_from_bytes("", 0);
+                r.data.m_Ok._0.f_checked = false;
+                return r;
+            }
             r.tag = 1;
             r.data.m_Err._0 = bloom_desktop_msg("next_event", "window is closed");
             return r;
+        }
+        if (w->layout_dirty) {
+            bloom_desktop_layout_apply(w);
         }
         MSG msg;
         BOOL got = GetMessageW(&msg, NULL, 0, 0);
@@ -1495,9 +3408,30 @@ bloom_enum_Result_std_desktop_Event_str bloom_desktop_next_event(
             );
             return r;
         }
+        if (msg.hwnd != NULL) {
+            HWND root = GetAncestor(msg.hwnd, GA_ROOT);
+            bloom_desktop_window *owner = root != NULL
+                ? (bloom_desktop_window *)(void *)GetWindowLongPtrW(root, GWLP_USERDATA)
+                : NULL;
+            if (bloom_desktop_is_live(owner) && IsDialogMessageW(root, &msg)) {
+                continue;
+            }
+        }
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
+        if (w->layout_dirty) {
+            bloom_desktop_layout_apply(w);
+        }
         if (w->event_count == 0 && w->closed) {
+            if (!w->close_delivered) {
+                w->close_delivered = true;
+                r.tag = 0;
+                r.data.m_Ok._0.f_kind = bloom_str_from_bytes("close", 5);
+                r.data.m_Ok._0.f_control = 0;
+                r.data.m_Ok._0.f_text = bloom_str_from_bytes("", 0);
+                r.data.m_Ok._0.f_checked = false;
+                return r;
+            }
             r.tag = 1;
             r.data.m_Err._0 = bloom_desktop_msg("next_event", "window is closed");
             return r;

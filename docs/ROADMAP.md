@@ -656,6 +656,73 @@ Vertagt (weiterhin geplant):
 - Linux-/macOS-GUI-Backends (ungetestet, nicht implementiert)
 - Weitere Webfunktionen (Streaming/Range, WebSocket) und Ökosystem
 
+## Version 0.22.0 – Layouts, Menüs und native Auswahlcontrols (implementiert)
+
+- **Layout-Engine:** `row`/`column`, Padding/Spacing, feste und
+  flexible Größen, Alignment, Verschachtelung (max. 32), automatische
+  Neuberechnung bei `WM_SIZE`/`WM_DPICHANGED`; fenstergebundene IDs ab
+  10000, deterministische Verteilung bei Platzmangel.
+- **Neue Controls:** ComboBox (`combo_*`), mehrzeilige TextArea
+  (LF/CRLF-Normalisierung, 64-KiB-Limit) und ListBox (`list_*`) inkl.
+  Auswahl, Anzahl, Hinzufügen/Entfernen und ungültigen Indizes;
+  `select`-Events mit Text.
+- **Menüs:** Menüleiste, Popups, Einträge, Trennlinien,
+  Aktivieren/Deaktivieren, IDs ab 1000, `menu`-Events; Fenster besitzt
+  und zerstört das `HMENU`.
+- **Dateidialoge:** `open_file_dialog`/`save_file_dialog` über
+  `GetOpenFileNameW`/`GetSaveFileNameW` (comdlg32), Unicode und
+  `Option::None` bei Abbruch; Dateizugriff bleibt bei `std::fs`.
+- **Tastatur:** Tab/Shift+Tab über `IsDialogMessageW`,
+  `focused_control`; deaktivierte/versteckte Controls werden
+  übersprungen.
+- **Events:** Schließereignis außerhalb der Queue (nie verloren, genau
+  einmal, nach bereits eingereihten Events), Überlaufzähler
+  `events_dropped`, Textfreigabe beim Verwerfen, Thread-Prüfung vor
+  jedem Aufruf.
+- **DPI:** `dpi_scale` und Layout-Neuberechnung; keine automatische
+  Skalierung manueller Controls.
+- **Intern:** `debug_event_flood`/`debug_cross_thread` als Test-Hooks.
+- **Beispiele:** `desktop_layout_stack`, `desktop_resize`,
+  `desktop_combo_box`, `desktop_text_area`, `desktop_list_box`,
+  `desktop_menu`, `desktop_file_dialog`, `desktop_keyboard`,
+  `desktop_dpi`, `desktop_gallery`
+- 538 Tests (323 Unit + 206 E2E + 9 neue Desktop-Integrationstests),
+  darunter Layoutgeometrie/Resize, ComboBox/ListBox/TextArea,
+  Menüereignisse inkl. deaktiviertem Eintrag, Tab/Shift+Tab,
+  Message-Box, Dateidialog-Abbruch, Queue-Überlauf, Thread-Probe,
+  DPI-Mathematik und alle zehn Beispiele mit `live allocations: 0`
+
+Vertagt (weiterhin geplant):
+
+- Automatische Control-Skalierung bei DPI-/Größenänderungen
+- Menü-Accessibility, Screenreader-Tests, echte Multi-Monitor-Tests
+- Toolbars, Tree-/Tabellen-Controls, Drag-and-drop, eigene Zeichenflächen
+- Dateidialog-Erfolgspfade als stabile Automatisierung
+- Threads/Executor und Thread-sichere Fenster
+- Linux-/macOS-GUI-Backends
+- Weitere Web-/Serverfunktionen (Streaming/Range, WebSocket) und Ökosystem
+
+## Version 0.23.0 – Server, Web und Automatisierung (geplant)
+
+Bloom soll die erste Wahl für Server-Software, Webseiten und
+Automatisierung unter Windows (später auch Linux) werden: Rust-ähnliche
+Sicherheit und Typen, Python-ähnlich einfache Bedienung, C-ähnlich
+nativer Output.
+
+- **Server:** bessere HTTP-Server-Ergonomie (Routing-Gruppen,
+  Middleware-/Handler-Struktur ohne Closures, graceful shutdown,
+  Streaming/Range, WebSocket-Grundlagen), Timeouts und Limits.
+- **Web:** Multipart-Uploads, ETag/Last-Modified, Template-Includes,
+  bessere Formular-/Session-Integration, JSON-Streaming.
+- **Automatisierung:** CLI-Argumente, Dateisystem-Watcher, geplante
+  Jobs/Timer, Process-Pipelines, bessere Fehlerberichte.
+- **Sprache:** Sammlungen/Iteratoren, Optional/Result-Ergonomie,
+  Module/Paketierung, bessere Generics und Fehlermeldungen.
+- **Desktop:** Accessibility, echte Multi-Monitor-DPI-Tests,
+  Dateidialog-Erfolgspfade automatisieren, weitere Controls.
+- **Tooling:** Test-Runner, Projektvorlagen, Dokumentation und
+  reproduzierbare Builds.
+
 ## Version 1.0.0+ – Ökosystem (geplant)
 
 - Paketmanager, Language Server (LSP), Debug-Informationen

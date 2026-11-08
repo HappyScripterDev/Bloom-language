@@ -2904,6 +2904,15 @@ impl Checker {
                 ],
             ),
             ("Size", vec![("width", Type::Int), ("height", Type::Int)]),
+            (
+                "LayoutItem",
+                vec![
+                    ("flex", Type::Int),
+                    ("width", Type::Int),
+                    ("height", Type::Int),
+                    ("align", Type::String),
+                ],
+            ),
         ];
         for (name, fields) in struct_defs {
             let canonical = format!("{}::{}", module, name);
@@ -2926,6 +2935,9 @@ impl Checker {
         let event_ty = Type::Struct(format!("{}::Event", module), Vec::new());
         let bounds_ty = Type::Struct(format!("{}::Bounds", module), Vec::new());
         let size_ty = Type::Struct(format!("{}::Size", module), Vec::new());
+        let item_ty = Type::Struct(format!("{}::LayoutItem", module), Vec::new());
+        let option_str = Type::Enum("Option".to_string(), vec![Type::String]);
+        let path_err = Type::Enum("Result".to_string(), vec![option_str, Type::String]);
         let result = |ok: Type| Type::Enum("Result".to_string(), vec![ok, Type::String]);
         let window_err = result(window_ty.clone());
         let bool_err = result(Type::Bool);
@@ -3058,7 +3070,7 @@ impl Checker {
                 "control_text",
                 "bloom_desktop_control_text",
                 vec![window_ty.clone(), Type::Int],
-                str_err,
+                str_err.clone(),
             ),
             (
                 "control_set_text",
@@ -3125,7 +3137,255 @@ impl Checker {
                 "control_focus",
                 "bloom_desktop_control_focus",
                 vec![window_ty.clone(), Type::Int],
-                bool_err,
+                bool_err.clone(),
+            ),
+            (
+                "text_area_create",
+                "bloom_desktop_text_area_create",
+                vec![
+                    window_ty.clone(),
+                    Type::String,
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                ],
+                int_err.clone(),
+            ),
+            (
+                "combo_create",
+                "bloom_desktop_combo_create",
+                vec![
+                    window_ty.clone(),
+                    Type::String,
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                ],
+                int_err.clone(),
+            ),
+            (
+                "list_create",
+                "bloom_desktop_list_create",
+                vec![
+                    window_ty.clone(),
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                    Type::Int,
+                ],
+                int_err.clone(),
+            ),
+            (
+                "combo_add",
+                "bloom_desktop_combo_add",
+                vec![window_ty.clone(), Type::Int, Type::String],
+                int_err.clone(),
+            ),
+            (
+                "combo_remove",
+                "bloom_desktop_combo_remove",
+                vec![window_ty.clone(), Type::Int, Type::Int],
+                bool_err.clone(),
+            ),
+            (
+                "combo_clear",
+                "bloom_desktop_combo_clear",
+                vec![window_ty.clone(), Type::Int],
+                bool_err.clone(),
+            ),
+            (
+                "combo_count",
+                "bloom_desktop_combo_count",
+                vec![window_ty.clone(), Type::Int],
+                int_err.clone(),
+            ),
+            (
+                "combo_selected",
+                "bloom_desktop_combo_selected",
+                vec![window_ty.clone(), Type::Int],
+                int_err.clone(),
+            ),
+            (
+                "combo_set_selected",
+                "bloom_desktop_combo_set_selected",
+                vec![window_ty.clone(), Type::Int, Type::Int],
+                bool_err.clone(),
+            ),
+            (
+                "combo_selected_text",
+                "bloom_desktop_combo_selected_text",
+                vec![window_ty.clone(), Type::Int],
+                str_err.clone(),
+            ),
+            (
+                "list_add",
+                "bloom_desktop_list_add",
+                vec![window_ty.clone(), Type::Int, Type::String],
+                int_err.clone(),
+            ),
+            (
+                "list_remove",
+                "bloom_desktop_list_remove",
+                vec![window_ty.clone(), Type::Int, Type::Int],
+                bool_err.clone(),
+            ),
+            (
+                "list_clear",
+                "bloom_desktop_list_clear",
+                vec![window_ty.clone(), Type::Int],
+                bool_err.clone(),
+            ),
+            (
+                "list_count",
+                "bloom_desktop_list_count",
+                vec![window_ty.clone(), Type::Int],
+                int_err.clone(),
+            ),
+            (
+                "list_selected",
+                "bloom_desktop_list_selected",
+                vec![window_ty.clone(), Type::Int],
+                int_err.clone(),
+            ),
+            (
+                "list_set_selected",
+                "bloom_desktop_list_set_selected",
+                vec![window_ty.clone(), Type::Int, Type::Int],
+                bool_err.clone(),
+            ),
+            (
+                "list_selected_text",
+                "bloom_desktop_list_selected_text",
+                vec![window_ty.clone(), Type::Int],
+                str_err.clone(),
+            ),
+            (
+                "events_dropped",
+                "bloom_desktop_events_dropped",
+                vec![window_ty.clone()],
+                int_err.clone(),
+            ),
+            (
+                "menu_create",
+                "bloom_desktop_menu_create",
+                vec![window_ty.clone()],
+                bool_err.clone(),
+            ),
+            (
+                "menu_add",
+                "bloom_desktop_menu_add",
+                vec![window_ty.clone(), Type::String],
+                int_err.clone(),
+            ),
+            (
+                "menu_item",
+                "bloom_desktop_menu_item",
+                vec![window_ty.clone(), Type::Int, Type::String],
+                int_err.clone(),
+            ),
+            (
+                "menu_separator",
+                "bloom_desktop_menu_separator",
+                vec![window_ty.clone(), Type::Int],
+                bool_err.clone(),
+            ),
+            (
+                "menu_set_enabled",
+                "bloom_desktop_menu_set_enabled",
+                vec![window_ty.clone(), Type::Int, Type::Bool],
+                bool_err.clone(),
+            ),
+            (
+                "layout_create",
+                "bloom_desktop_layout_create",
+                vec![window_ty.clone(), Type::String],
+                int_err.clone(),
+            ),
+            (
+                "layout_set_padding",
+                "bloom_desktop_layout_set_padding",
+                vec![window_ty.clone(), Type::Int, Type::Int],
+                bool_err.clone(),
+            ),
+            (
+                "layout_set_spacing",
+                "bloom_desktop_layout_set_spacing",
+                vec![window_ty.clone(), Type::Int, Type::Int],
+                bool_err.clone(),
+            ),
+            (
+                "layout_set_align",
+                "bloom_desktop_layout_set_align",
+                vec![window_ty.clone(), Type::Int, Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "layout_add_control",
+                "bloom_desktop_layout_add_control",
+                vec![window_ty.clone(), Type::Int, Type::Int, item_ty.clone()],
+                bool_err.clone(),
+            ),
+            (
+                "layout_add_layout",
+                "bloom_desktop_layout_add_layout",
+                vec![window_ty.clone(), Type::Int, Type::Int, item_ty.clone()],
+                bool_err.clone(),
+            ),
+            (
+                "layout_attach",
+                "bloom_desktop_layout_attach",
+                vec![window_ty.clone(), Type::Int],
+                bool_err.clone(),
+            ),
+            (
+                "layout_refresh",
+                "bloom_desktop_layout_refresh",
+                vec![window_ty.clone()],
+                bool_err.clone(),
+            ),
+            (
+                "layout_detach",
+                "bloom_desktop_layout_detach",
+                vec![window_ty.clone()],
+                bool_err.clone(),
+            ),
+            (
+                "focused_control",
+                "bloom_desktop_focused_control",
+                vec![window_ty.clone()],
+                int_err.clone(),
+            ),
+            (
+                "dpi_scale",
+                "bloom_desktop_dpi_scale",
+                vec![Type::Int, Type::Int],
+                int_err.clone(),
+            ),
+            (
+                "open_file_dialog",
+                "bloom_desktop_open_file_dialog",
+                vec![window_ty.clone(), Type::String, Type::String],
+                path_err.clone(),
+            ),
+            (
+                "save_file_dialog",
+                "bloom_desktop_save_file_dialog",
+                vec![window_ty.clone(), Type::String, Type::String, Type::String],
+                path_err.clone(),
+            ),
+            (
+                "debug_event_flood",
+                "bloom_desktop_debug_event_flood",
+                vec![window_ty.clone(), Type::Int],
+                int_err.clone(),
+            ),
+            (
+                "debug_cross_thread",
+                "bloom_desktop_debug_cross_thread",
+                vec![window_ty.clone()],
+                bool_err.clone(),
             ),
             (
                 "next_event",

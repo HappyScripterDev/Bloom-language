@@ -1,0 +1,97 @@
+// DPI: logische Einheiten, aktuelle Fenster-DPI und Umrechnung.
+use std::desktop;
+
+fn update(win: desktop::Window, status: int) -> void {
+    match desktop::window_dpi(win) {
+        Result::Ok(dpi) => report(win, status, dpi),
+        Result::Err(e) => println("DPI: " + e)
+    };
+}
+
+fn report(win: desktop::Window, status: int, dpi: int) -> void {
+    match desktop::window_client_size(win) {
+        Result::Ok(size) => show(win, status, dpi, size),
+        Result::Err(e) => println("Groesse: " + e)
+    };
+}
+
+fn show(win: desktop::Window, status: int, dpi: int, size: desktop::Size) -> void {
+    match desktop::dpi_scale(300, dpi) {
+        Result::Ok(px) => set(
+            win,
+            status,
+            "DPI " + str(dpi) + ", Client " + str(size.width) + "x" + str(size.height)
+                + ", 300 -> " + str(px) + " Pixel"
+        ),
+        Result::Err(e) => println("Skalierung: " + e)
+    };
+}
+
+fn set(win: desktop::Window, label: int, text: string) -> void {
+    match desktop::control_set_text(win, label, text) {
+        Result::Ok(_) => println(text),
+        Result::Err(e) => println("Label: " + e)
+    };
+}
+
+fn on_event(win: desktop::Window, ev: desktop::Event, status: int) -> bool {
+    if ev.kind == "click" {
+        update(win, status);
+    } else if ev.kind == "close" {
+        println("Fenster geschlossen");
+    }
+    return true;
+}
+
+fn step(win: desktop::Window, status: int) -> bool {
+    return match desktop::next_event(win) {
+        Result::Ok(ev) => on_event(win, ev, status),
+        Result::Err(e) => fail(e)
+    };
+}
+
+fn fail(e: string) -> bool {
+    println("FEHLER: " + e);
+    return false;
+}
+
+fn run() -> Result<int, string> {
+    let win = desktop::window_create("Bloom Desktop: DPI", 460, 260)?;
+    let root = desktop::layout_create(win, "column")?;
+    desktop::layout_set_padding(win, root, 16)?;
+    desktop::layout_set_spacing(win, root, 10)?;
+    let info = desktop::label_create(win, "Logische Einheiten: 96 DPI", 0, 0, 10, 10)?;
+    desktop::layout_add_control(win, root, info, desktop::LayoutItem {
+        flex: 0, width: 0, height: 24, align: ""
+    })?;
+    let status = desktop::label_create(win, "", 0, 0, 10, 10)?;
+    desktop::layout_add_control(win, root, status, desktop::LayoutItem {
+        flex: 1, width: 0, height: 0, align: "start"
+    })?;
+    let button = desktop::button_create(win, "Aktualisieren", 0, 0, 10, 10)?;
+    desktop::layout_add_control(win, root, button, desktop::LayoutItem {
+        flex: 0, width: 0, height: 34, align: ""
+    })?;
+    desktop::layout_attach(win, root)?;
+    update(win, status);
+    println("dpi144=" + str(desktop::dpi_scale(300, 144)?));
+    desktop::window_show(win)?;
+    while step(win, status) {
+        if !desktop::window_alive(win) {
+            break;
+        }
+    }
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

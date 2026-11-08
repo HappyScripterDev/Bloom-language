@@ -289,6 +289,24 @@ ausgelöster Klick die blockierende Schleife aufweckt. Es gibt genau
 eine Zustellung pro Ereignis; `WM_QUIT` wird nicht selbst erzeugt,
 damit ein späteres Fenster nicht sofort beendet wird.
 
+Seit 0.22 verwaltet das Fenster zusätzlich **Layouts** (fenstergebundene
+IDs ab 10000, dynamische Kinderlisten, max. 64 Layouts/256 Kinder/Tiefe
+32/2048 Knoten pro Lauf), **Menüs** (ein `HMENU`, Einträge mit IDs ab
+1000, max. 128; `DestroyMenu` beim Schließen) sowie die neuen Controls
+ComboBox, mehrzeiliges EDIT und ListBox. `WM_SIZE`/`WM_DPICHANGED`
+setzen ein Dirty-Flag; die Ereignisschleife wendet das Layout nach dem
+Dispatch an (nicht pro Event, sondern nur bei Änderungen). Die
+Layoutberechnung arbeitet mit logischen 96-DPI-Werten, prüft
+Überläufe und ist deterministisch; manuell gesetzte Controls bleiben
+unberührt. Dateidialoge nutzen `GetOpenFileNameW`/`GetSaveFileNameW`
+(comdlg32, Unicode, Abbruch = `Option::None`). `IsDialogMessageW`
+liefert Tab/Shift+Tab; `focused_control` liest den Fokus. Die
+Ereigniswarteschlange hat 64 Plätze, verwirft bei Überlauf das älteste
+Event und zählt in `events_dropped`; das Schließereignis liegt
+außerhalb der Queue und wird nach den bereits eingereihten Events genau
+einmal geliefert. Interne Hooks (`debug_event_flood`,
+`debug_cross_thread`) sind nur für Tests.
+
 Texte laufen über `MultiByteToWideChar`/`WideCharToMultiByte`
 (UTF-8, `MB_ERR_INVALID_CHARS`), mit 1-MiB-Limit, Ablehnung von
 Steuerzeichen/NUL-Bytes und Größenprüfung. Koordinaten sind logische
@@ -301,7 +319,8 @@ Unter Nicht-Windows enthält die Datei Stubs, die `available() = false`
 liefern und sonst `Err` zurückgeben; es werden keine Win32-Bibliotheken
 gelinkt.
 
-`auto_links` ergänzt unter Windows `user32` und `gdi32`. Erkennt
+`auto_links` ergänzt unter Windows `user32`, `gdi32` und `comdlg32`.
+Erkennt
 `prepare` `std::desktop`, setzt `Prepared.uses_desktop`; der
 MSVC-Linkaufruf erhält dann `/link /SUBSYSTEM:WINDOWS
 /ENTRY:mainCRTStartup` (CRT und `main` bleiben erhalten, aber ohne
@@ -796,9 +815,12 @@ nativer Kopfsemantik dargestellt.
   URL-/ID-/Token-, Komponenten-, Theme-/Stylesheet-, Limit- und
   HTTP-Auslieferungstests (eigene Seite und CSS mit Cache-Header) sowie
   die neun Beispiele. `std::desktop` wird über echte Fenster und
-  Controls getestet: Ereignisse (`click`, `check`, `input`, `close`),
-  Cross-Prozess-`WM_SETTEXT` mit Unicode, mehrere Fenster, DPI-/
-  Größenumrechnung, Fehler-/Lebensdauerpfade, alle acht Beispiele,
+  Controls getestet: Ereignisse (`click`, `check`, `input`, `select`,
+  `menu`, `close`), Cross-Prozess-`WM_SETTEXT` mit Unicode, mehrere
+  Fenster, Layoutgeometrie und -resize, weitere Controls, Menüs
+  (inkl. deaktiviertem Eintrag), Tastatur-Tab/Shift+Tab, Message-Box,
+  Dateidialog-Abbruch, DPI-/Größenumrechnung, Queue-Überlauf,
+  Thread-Probe, Fehler-/Lebensdauerpfade, alle zehn 0.22-Beispiele,
   PE-Subsystem (`WINDOWS` vs. `CONSOLE`) und `--emit-c`. Fehlt
   ein C-Compiler, überspringen sich die betroffenen Tests mit Hinweis.
 

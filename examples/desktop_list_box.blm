@@ -1,0 +1,141 @@
+// ListBox: Eintraege hinzufuegen, entfernen und auswaehlen.
+use std::desktop;
+
+fn on_event(
+    win: desktop::Window,
+    ev: desktop::Event,
+    list: int,
+    add: int,
+    del: int,
+    show_btn: int,
+    status: int
+) -> bool {
+    if ev.kind == "select" {
+        set(win, status, "Auswahl: " + ev.text);
+    } else if ev.kind == "click" {
+        if ev.control == add {
+            add_item(win, list, status);
+        } else if ev.control == del {
+            remove_item(win, list, status);
+        } else if ev.control == show_btn {
+            selection(win, list, status);
+        }
+    } else if ev.kind == "close" {
+        println("Fenster geschlossen");
+    }
+    return true;
+}
+
+fn add_item(win: desktop::Window, list: int, status: int) -> void {
+    match desktop::list_count(win, list) {
+        Result::Ok(count) => match desktop::list_add(win, list, "Neu " + str(count + 1)) {
+            Result::Ok(index) => set(win, status, "Hinzugefuegt: Index " + str(index)),
+            Result::Err(e) => println("Hinzufuegen: " + e)
+        },
+        Result::Err(e) => println("Anzahl: " + e)
+    };
+}
+
+fn remove_item(win: desktop::Window, list: int, status: int) -> void {
+    match desktop::list_selected(win, list) {
+        Result::Ok(index) => remove_at(win, list, status, index),
+        Result::Err(e) => println("Auswahl: " + e)
+    };
+}
+
+fn remove_at(win: desktop::Window, list: int, status: int, index: int) -> void {
+    if index < 0 {
+        set(win, status, "Keine Auswahl.");
+        return;
+    }
+    match desktop::list_remove(win, list, index) {
+        Result::Ok(_) => set(win, status, "Entfernt: Index " + str(index)),
+        Result::Err(e) => println("Entfernen: " + e)
+    };
+}
+
+fn selection(win: desktop::Window, list: int, status: int) -> void {
+    match desktop::list_selected_text(win, list) {
+        Result::Ok(text) => set(win, status, "Auswahl: " + text),
+        Result::Err(e) => println("Auswahl: " + e)
+    };
+}
+
+fn set(win: desktop::Window, label: int, text: string) -> void {
+    match desktop::control_set_text(win, label, text) {
+        Result::Ok(_) => println(text),
+        Result::Err(e) => println("Label: " + e)
+    };
+}
+
+fn step(
+    win: desktop::Window,
+    list: int,
+    add: int,
+    del: int,
+    show_btn: int,
+    status: int
+) -> bool {
+    return match desktop::next_event(win) {
+        Result::Ok(ev) => on_event(win, ev, list, add, del, show_btn, status),
+        Result::Err(e) => fail(e)
+    };
+}
+
+fn fail(e: string) -> bool {
+    println("FEHLER: " + e);
+    return false;
+}
+
+fn run() -> Result<int, string> {
+    let win = desktop::window_create("Bloom Desktop: ListBox", 480, 320)?;
+    let root = desktop::layout_create(win, "column")?;
+    desktop::layout_set_padding(win, root, 12)?;
+    desktop::layout_set_spacing(win, root, 8)?;
+    let list = desktop::list_create(win, 0, 0, 10, 10)?;
+    desktop::list_add(win, list, "Apfel")?;
+    desktop::list_add(win, list, "Birne")?;
+    desktop::layout_add_control(win, root, list, desktop::LayoutItem {
+        flex: 1, width: 0, height: 0, align: ""
+    })?;
+    let row = desktop::layout_create(win, "row")?;
+    let add = desktop::button_create(win, "Hinzufuegen", 0, 0, 10, 10)?;
+    let del = desktop::button_create(win, "Entfernen", 0, 0, 10, 10)?;
+    let show_btn = desktop::button_create(win, "Auswahl", 0, 0, 10, 10)?;
+    desktop::layout_add_control(win, row, add, desktop::LayoutItem {
+        flex: 1, width: 0, height: 34, align: ""
+    })?;
+    desktop::layout_add_control(win, row, del, desktop::LayoutItem {
+        flex: 1, width: 0, height: 34, align: ""
+    })?;
+    desktop::layout_add_control(win, row, show_btn, desktop::LayoutItem {
+        flex: 1, width: 0, height: 34, align: ""
+    })?;
+    desktop::layout_add_layout(win, root, row, desktop::LayoutItem {
+        flex: 0, width: 0, height: 34, align: ""
+    })?;
+    let status = desktop::label_create(win, "", 0, 0, 10, 10)?;
+    desktop::layout_add_control(win, root, status, desktop::LayoutItem {
+        flex: 0, width: 0, height: 24, align: ""
+    })?;
+    desktop::layout_attach(win, root)?;
+    desktop::window_show(win)?;
+    while step(win, list, add, del, show_btn, status) {
+        if !desktop::window_alive(win) {
+            break;
+        }
+    }
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

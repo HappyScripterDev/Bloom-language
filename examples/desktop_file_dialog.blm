@@ -1,0 +1,151 @@
+// Dateidialoge: Oeffnen und Speichern ueber die nativen Windows-Dialoge.
+use std::desktop;
+use std::fs;
+
+fn open_case(win: desktop::Window, status: int) -> void {
+    match desktop::open_file_dialog(
+        win,
+        "Bloom Datei oeffnen",
+        "Textdateien (*.txt)|*.txt|Alle Dateien (*.*)|*.*|"
+    ) {
+        Result::Ok(path) => open_path(win, status, path),
+        Result::Err(e) => println("Oeffnen: " + e)
+    };
+}
+
+fn open_path(win: desktop::Window, status: int, path: Option<string>) -> void {
+    match path {
+        Option::Some(p) => read_file(win, status, p),
+        Option::None => set(win, status, "Oeffnen abgebrochen.")
+    };
+}
+
+fn read_file(win: desktop::Window, status: int, path: string) -> void {
+    match fs::read_text(path) {
+        Result::Ok(text) => set(win, status, "Gelesen: " + str(len(text)) + " Bytes aus " + path),
+        Result::Err(e) => set(win, status, "Lesen: " + e)
+    };
+}
+
+fn save_case(win: desktop::Window, status: int) -> void {
+    match desktop::save_file_dialog(
+        win,
+        "Bloom Datei speichern",
+        "Textdateien (*.txt)|*.txt|Alle Dateien (*.*)|*.*|",
+        "bloom_demo.txt"
+    ) {
+        Result::Ok(path) => save_path(win, status, path),
+        Result::Err(e) => println("Speichern: " + e)
+    };
+}
+
+fn save_path(win: desktop::Window, status: int, path: Option<string>) -> void {
+    match path {
+        Option::Some(p) => write_file(win, status, p),
+        Option::None => set(win, status, "Speichern abgebrochen.")
+    };
+}
+
+fn write_file(win: desktop::Window, status: int, path: string) -> void {
+    match fs::write_text(path, "Hallo aus Bloom 0.22\n") {
+        Result::Ok(bytes) => set(win, status, "Gespeichert: " + str(bytes) + " Bytes in " + path),
+        Result::Err(e) => set(win, status, "Schreiben: " + e)
+    };
+}
+
+fn set(win: desktop::Window, label: int, text: string) -> void {
+    match desktop::control_set_text(win, label, text) {
+        Result::Ok(_) => println(text),
+        Result::Err(e) => println("Label: " + e)
+    };
+}
+
+fn on_event(
+    win: desktop::Window,
+    ev: desktop::Event,
+    open_btn: int,
+    save_btn: int,
+    end_btn: int,
+    status: int
+) -> bool {
+    if ev.kind == "click" {
+        if ev.control == open_btn {
+            open_case(win, status);
+        } else if ev.control == save_btn {
+            save_case(win, status);
+        } else if ev.control == end_btn {
+            match desktop::window_close(win) {
+                Result::Ok(_) => println("Beendet"),
+                Result::Err(e) => println("Schliessen: " + e)
+            };
+        }
+    } else if ev.kind == "close" {
+        println("Fenster geschlossen");
+    }
+    return true;
+}
+
+fn step(
+    win: desktop::Window,
+    open_btn: int,
+    save_btn: int,
+    end_btn: int,
+    status: int
+) -> bool {
+    return match desktop::next_event(win) {
+        Result::Ok(ev) => on_event(win, ev, open_btn, save_btn, end_btn, status),
+        Result::Err(e) => fail(e)
+    };
+}
+
+fn fail(e: string) -> bool {
+    println("FEHLER: " + e);
+    return false;
+}
+
+fn run() -> Result<int, string> {
+    let win = desktop::window_create("Bloom Desktop: Dateidialoge", 520, 260)?;
+    let root = desktop::layout_create(win, "column")?;
+    desktop::layout_set_padding(win, root, 16)?;
+    desktop::layout_set_spacing(win, root, 10)?;
+    let title = desktop::label_create(win, "Native Dateidialoge", 0, 0, 10, 10)?;
+    desktop::layout_add_control(win, root, title, desktop::LayoutItem {
+        flex: 0, width: 0, height: 28, align: ""
+    })?;
+    let open_btn = desktop::button_create(win, "Datei oeffnen", 0, 0, 10, 10)?;
+    let save_btn = desktop::button_create(win, "Datei speichern", 0, 0, 10, 10)?;
+    let end_btn = desktop::button_create(win, "Ende", 0, 0, 10, 10)?;
+    desktop::layout_add_control(win, root, open_btn, desktop::LayoutItem {
+        flex: 0, width: 0, height: 34, align: ""
+    })?;
+    desktop::layout_add_control(win, root, save_btn, desktop::LayoutItem {
+        flex: 0, width: 0, height: 34, align: ""
+    })?;
+    desktop::layout_add_control(win, root, end_btn, desktop::LayoutItem {
+        flex: 0, width: 0, height: 34, align: ""
+    })?;
+    let status = desktop::label_create(win, "", 0, 0, 10, 10)?;
+    desktop::layout_add_control(win, root, status, desktop::LayoutItem {
+        flex: 1, width: 0, height: 0, align: "start"
+    })?;
+    desktop::layout_attach(win, root)?;
+    desktop::window_show(win)?;
+    while step(win, open_btn, save_btn, end_btn, status) {
+        if !desktop::window_alive(win) {
+            break;
+        }
+    }
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

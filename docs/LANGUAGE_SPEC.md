@@ -2235,6 +2235,182 @@ pub struct Size { width: int, height: int }
   können in einem Programm verwendet werden (Weboberfläche und
   Desktopfenster), teilen aber keine Widgets.
 
+### 13.18 `std::desktop`: Layouts, Menüs, Dialoge und weitere Controls
+
+Seit 0.22 enthält `std::desktop` zusätzlich eine native Layout-Engine,
+drei weitere Controls, Menüs, Dateidialoge und Tastaturfokus.
+Alle IDs sind fenstergebunden und werden nach dem Schließen ungültig.
+
+#### Layout
+
+| Funktion | Signatur |
+| --- | --- |
+| `layout_create(window, kind)` | `Window, string -> Result<int, string>` (`"row"`/`"column"`) |
+| `layout_set_padding(window, layout, padding)` | `Window, int, int -> Result<bool, string>` |
+| `layout_set_spacing(window, layout, spacing)` | `Window, int, int -> Result<bool, string>` |
+| `layout_set_align(window, layout, align)` | `Window, int, string -> Result<bool, string>` |
+| `layout_add_control(window, layout, control, item)` | `Window, int, int, LayoutItem -> Result<bool, string>` |
+| `layout_add_layout(window, parent, child, item)` | `Window, int, int, LayoutItem -> Result<bool, string>` |
+| `layout_attach(window, layout)` | `Window, int -> Result<bool, string>` |
+| `layout_refresh(window)` | `Window -> Result<bool, string>` |
+| `layout_detach(window)` | `Window -> Result<bool, string>` |
+
+```bloom
+pub struct LayoutItem { flex: int, width: int, height: int, align: string }
+```
+
+- **IDs:** Layouts beginnen bei 10000 (Controls ab 100, Menüs ab 1000).
+  Pro Fenster höchstens 64 Layouts, 256 Kinder je Layout, Tiefe 32 und
+  2048 Knoten pro Berechnung. Ein Layout gehört zu genau einem Fenster.
+- **Hauptachse:** `row` verteilt Breite, `column` Höhe. Ein Kind mit
+  `width`/`height` > 0 entlang der Hauptachse ist **fest**; sonst wird
+  der Wert als **Flex-Gewicht** benutzt (`0` zählt wie `1`). Feste
+  Größen bleiben erhalten; der Rest wird proportional verteilt
+  (Ganzzahl, Rest deterministisch an die ersten Kinder).
+- **Querachse:** `width`/`height` > 0 setzt die Quergröße fest; `0`
+  füllt die verfügbare Querachse. `align` (`start`, `center`, `end`,
+  `stretch`, leer = Containerwert) richtet feste Quergrößen aus.
+  Standard ist `start`.
+- **Container:** `padding` und `spacing` sind 0..4096 logische
+  Einheiten. Reicht der Platz nicht, bleiben feste Größen stehen,
+  flexible schrumpfen auf 0; das Ergebnis ist deterministisch und kann
+  überlaufen. Leere Container verbrauchen nur Padding/Spacing.
+- **Verschachtelung:** `layout_add_layout` nimmt dasselbe `LayoutItem`;
+  ein Kind-Layout kann feste oder flexible Größen haben. Ein bereits
+  angehängtes Layout wird abgelehnt; Zyklen sind ausgeschlossen.
+- **Anwendung:** `layout_attach` bindet das Wurzel-Layout an den
+  Clientbereich und ordnet sofort an. Bei `WM_SIZE` und
+  `WM_DPICHANGED` wird automatisch neu berechnet; `layout_refresh`
+  erzwingt es. Layout-Änderungen wirken bei angehängtem Layout sofort.
+- **Grenzen:** Layouts positionieren nur Controls, keine nativen
+  Fenster. Manuell gesetzte Controls bleiben unberührt. Alle
+  Koordinaten sind logisch (96 DPI), die Umrechnung ist
+  überlaufgeprüft. `layout_detach` stoppt die automatische Anordnung.
+
+#### Zusätzliche Controls
+
+| Funktion | Signatur |
+| --- | --- |
+| `text_area_create(window, text, x, y, w, h)` | `Window, string, int, int, int, int -> Result<int, string>` |
+| `combo_create(window, text, x, y, w, h)` | `Window, string, int, int, int, int -> Result<int, string>` |
+| `list_create(window, x, y, w, h)` | `Window, int, int, int, int -> Result<int, string>` |
+| `combo_add(window, control, text)` | `Window, int, string -> Result<int, string>` |
+| `combo_remove(window, control, index)` | `Window, int, int -> Result<bool, string>` |
+| `combo_clear(window, control)` | `Window, int -> Result<bool, string>` |
+| `combo_count(window, control)` | `Window, int -> Result<int, string>` |
+| `combo_selected(window, control)` | `Window, int -> Result<int, string>` |
+| `combo_set_selected(window, control, index)` | `Window, int, int -> Result<bool, string>` |
+| `combo_selected_text(window, control)` | `Window, int -> Result<string, string>` |
+| `list_add(window, control, text)` | `Window, int, string -> Result<int, string>` |
+| `list_remove(window, control, index)` | `Window, int, int -> Result<bool, string>` |
+| `list_clear(window, control)` | `Window, int -> Result<bool, string>` |
+| `list_count(window, control)` | `Window, int -> Result<int, string>` |
+| `list_selected(window, control)` | `Window, int -> Result<int, string>` |
+| `list_set_selected(window, control, index)` | `Window, int, int -> Result<bool, string>` |
+| `list_selected_text(window, control)` | `Window, int -> Result<string, string>` |
+
+- **ComboBox** ist eine reine Auswahlliste (`CBS_DROPDOWNLIST`), keine
+  Freitexteingabe. Der Initialtext wird als erster Eintrag angelegt und
+  ausgewählt. `combo_set_selected(-1)` löscht die Auswahl;
+  `combo_selected_text` liefert dann `""`. Indizes außerhalb
+  `0..count-1` (bzw. `-1`) sind Fehler; programmatische Auswahl erzeugt
+  **kein** `select`-Event.
+- **TextArea** ist ein mehrzeiliges EDIT mit Scrollbalken. Die
+  Bloom-API verwendet `\n`; die Runtime wandelt intern nach
+  `\r\n` und beim Lesen zurück. Text ist auf 65536 Bytes begrenzt,
+  Steuerzeichen außer `\t`, `\n`, `\r` und NUL-Bytes werden abgelehnt.
+  `control_text`/`control_set_text` gelten auch hier.
+- **ListBox** ist eine Einzelauswahl-Liste (`LBS_NOTIFY`). `list_count`
+  liefert die Anzahl; `list_selected` `-1`, wenn nichts ausgewählt ist.
+  `list_remove` und `list_set_selected` prüfen den Index.
+- **Events:** ComboBox/ListBox lösen `"select"` mit `control` und
+  `text` (ausgewählter Text) aus. Die TextArea löst `"input"` mit dem
+  aktuellen Text aus (bei Benutzereingabe); programmatisches
+  `control_set_text` unterdrückt das Event.
+
+#### Menüs
+
+| Funktion | Signatur |
+| --- | --- |
+| `menu_create(window)` | `Window -> Result<bool, string>` |
+| `menu_add(window, label)` | `Window, string -> Result<int, string>` |
+| `menu_item(window, menu_id, label)` | `Window, int, string -> Result<int, string>` |
+| `menu_separator(window, menu_id)` | `Window, int -> Result<bool, string>` |
+| `menu_set_enabled(window, item_id, enabled)` | `Window, int, bool -> Result<bool, string>` |
+
+- `menu_create` hängt eine Menüleiste an das Fenster (nur einmal).
+  `menu_add` erzeugt ein Popup-Menü und liefert dessen ID;
+  `menu_item` fügt einen Befehl hinzu; `menu_separator` eine Trennlinie.
+  IDs beginnen bei 1000, maximal 128 Einträge. Ein Klick löst ein
+  `"menu"`-Event mit Befehl-ID und Label (`ev.text`) aus.
+- Menüs gehören dem Fenster: Schließen entfernt die Leiste
+  (`SetMenu(NULL)`) und zerstört das native `HMENU`. Nach dem Schließen
+  liefern Menüfunktionen `Err`. Nur eine Menüebene (Popup) wird
+  unterstützt; verschachtelte Untermenüs nicht. `&`-Beschleuniger sind
+  native Windows-Beschleuniger.
+- `menu_set_enabled` deaktiviert einen Eintrag (grau); deaktivierte
+  Einträge lösen in der echten Bedienung kein Kommando aus.
+
+#### Dateidialoge
+
+| Funktion | Signatur |
+| --- | --- |
+| `open_file_dialog(window, title, filter)` | `Window, string, string -> Result<Option<string>, string>` |
+| `save_file_dialog(window, title, filter, default_name)` | `Window, string, string, string -> Result<Option<string>, string>` |
+
+- Verwendet `GetOpenFileNameW`/`GetSaveFileNameW` (comdlg32) mit
+  Unicode-Pfaden und nativer Oberfläche. Filter: Paare aus Beschreibung
+  und Muster, getrennt durch `|`, z. B.
+  `"Text (*.txt)|*.txt|Alle (*.*)|*.*|"`; leer = alle Dateien.
+- Rückgabe: `Ok(Some(pfad))` nach Bestätigung, `Ok(None)` bei Abbruch,
+  `Err` bei ungültigen Argumenten oder Dialogfehlern. Der Dialog ist
+  modal und läuft auf dem GUI-Thread.
+- Ein gewählter Pfad ist **keine** Berechtigung: `std::fs`/`std::path`
+  prüfen Existenz, Rechte und Fehler selbst; die Datei kann sich nach
+  der Auswahl ändern.
+
+#### Tastatur und Fokus
+
+| Funktion | Signatur |
+| --- | --- |
+| `focused_control(window)` | `Window -> Result<int, string>` |
+| `dpi_scale(value, dpi)` | `int, int -> Result<int, string>` |
+
+- Tab/Shift+Tab laufen über `IsDialogMessageW` und die native
+  Tab-Reihenfolge. Deaktivierte und unsichtbare Controls werden
+  übersprungen; Space aktiviert den fokussierten Button/Checkbox
+  nativ. Enter löst **keinen** Standardbutton aus (kein
+  Dialog-Konzept).
+- `focused_control` liefert die ID des fokussierten Controls des
+  Fensters oder `0`. Nach dem Schließen ist der Fokus ungültig.
+- `dpi_scale` rechnet logische 96-DPI-Werte in physische Pixel um
+  (dpi 48..960, Wert ±1000000, überlaufgeprüft). Die Runtime nutzt
+  dieselbe Rechnung für Fenster/Controls.
+
+#### Ereignis- und Thread-Regeln (0.22)
+
+- Ereignisarten: `click`, `check`, `input`, `select`, `menu`, `close`.
+  `Event.text` enthält bei `input`/`select`/`menu` den Text, `checked`
+  den Checkbox-Zustand.
+- Pro Fenster gibt es 64 Plätze. Ist die Warteschlange voll, wird das
+  **älteste** Ereignis verworfen und `events_dropped(window)` erhöht
+  sich (kumulativ). Das Schließereignis liegt nicht in der
+  Warteschlange: Es geht nie verloren, wird genau einmal geliefert und
+  kommt nach allen bereits eingereihten Ereignissen. Danach liefert
+  `next_event` `Err("window is closed")`.
+- Alle Desktop-Aufrufe müssen auf dem Thread laufen, der das Fenster
+  erzeugt hat; die Runtime prüft das vor jedem Win32-Aufruf und liefert
+  sonst `Err`. `debug_cross_thread` prüft diesen Pfad intern.
+- `debug_event_flood(window, count)` und `debug_cross_thread(window)`
+  sind **interne Test-Hooks**, keine stabile API.
+
+#### Build
+
+`std::desktop` linkt unter MSVC automatisch `user32`, `gdi32` und
+`comdlg32`; GUI-Programme erhalten `/SUBSYSTEM:WINDOWS
+/ENTRY:mainCRTStartup`, `--console` erzwingt die Konsole. `--emit-c`
+schreibt die vollständige Runtime.
+
 ## 14. Fehlerdiagnostik
 
 Format:
@@ -2328,7 +2504,7 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
 | 5 | Datei-/E/A-Fehler |
 | 70 | Laufzeitfehler im Bloom-Programm |
 
-## 16. Ausdrücklich nicht unterstützt (Version 0.21.0)
+## 16. Ausdrücklich nicht unterstützt (Version 0.22.0)
 
 - Referenzempfänger (`&self`/`&mut self`), `var self` auf Enums
 - Klassen, Vererbung, Interfaces
@@ -2366,11 +2542,12 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
   automatische Formularvalidierung im Browser** (std::ui liefert
   statisches, maskiertes HTML und ein festes Stylesheet; Verhalten im
   Browser ist nicht Teil der Sprache)
-- **Native Desktop-APIs außerhalb von Windows, Menüs, Toolbars,
-  Tree-/Tabellen-Controls, Dialogbibliotheken, eigenes Rendering,
-  Direct3D, automatische Layouts/DPI-Skalierung und Thread-sichere
-  Fenster** (std::desktop ist ein einzelner GUI-Thread mit Labels,
-  Buttons, einzeiligen Eingaben und Checkboxen)
+- **Native Desktop-APIs außerhalb von Windows, Toolbars, Tree-/
+  Tabellen-Controls, frei gestaltbare Dialoge, eigenes Rendering,
+  Direct3D, automatische Control-Skalierung bei DPI-Wechseln,
+  Thread-sichere Fenster und verschachtelte Menüs** (std::desktop ist
+  ein einzelner GUI-Thread mit Fenstern, Basiscontrols, Layouts, einer
+  Menüebene und nativen Dateidialogen)
 - **OAuth/OIDC, externe Login-Anbieter, E-Mail-Verifikation,
   Passwort-zurücksetzen per E-Mail, MFA/Passkeys, JWT als
   Session-Ersatz, verteilte Session-Stores, ABAC/Policy-Sprachen,

@@ -276,6 +276,23 @@ Erzeuger-Thread laufen; die Runtime prüft das und liefert sonst `Err`.
 Die Desktop-Tests prüfen `live allocations: 0`, zerstörte Fenster
 (`IsWindow == 0`) und wiederholtes Schließen.
 
+**Layouts und Menüs gehören dem Fenster, nicht Bloom-Handles.** Layouts
+sind Integer-IDs in einer Registry (max. 64); ihre dynamischen
+Kinderlisten werden beim Schließen des Fensters freigegeben. Menüs
+bestehen aus einem nativen `HMENU` plus höchstens 128 Registry-Einträgen
+mit eigenen Label-Strings; `close` ruft `SetMenu(NULL)` und
+`DestroyMenu` auf und gibt alle Labels frei. Ein geschlossenes Fenster
+macht beide ID-Räume ungültig; IDs werden innerhalb eines Fensters
+monoton vergeben und nicht wiederverwendet. Die Ereigniswarteschlange
+speichert nur `click`/`check`/`input`/`select`/`menu`; das
+Schließereignis wird als Flag außerhalb der 64 Plätze geführt, damit es
+nicht verdrängt werden kann. Überlauf verwirft das älteste Event samt
+Textkopie und zählt `events_dropped`. Zusätzliche Win32-Ressourcen
+(HMENU, ComboBox/ListBox/Edit-Puffer, Dateidialoge) werden von Windows
+verwaltet; die Runtime gibt nur eigene Puffer und Labels frei. Die
+internen Hooks `debug_event_flood`/`debug_cross_thread` existieren nur
+für Tests.
+
 Alle Stdlib-Tests
 laufen unter `BLOOM_MEM_REPORT=1`. Getestet wird nativ mit MSVC
 (Windows). Valgrind/ASan sind auf dieser Toolchain nicht verfügbar und

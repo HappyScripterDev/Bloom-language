@@ -254,7 +254,7 @@ fn auto_links(checked: &CheckedProgram) -> Vec<toolchain::LinkItem> {
             "std::tls" => &["ws2_32", "secur32", "crypt32"],
             "std::web" if cfg!(windows) => &["bcrypt"],
             "std::web" => &[],
-            "std::desktop" if cfg!(windows) => &["user32", "gdi32"],
+            "std::desktop" if cfg!(windows) => &["user32", "gdi32", "comdlg32"],
             "std::desktop" => &[],
             _ => &[],
         };
