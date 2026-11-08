@@ -782,7 +782,7 @@ bloom_enum_Result_arr_str_str bloom_fs_read_dir(bloom_str path) {
     }
     for (;;) {
         if (wcscmp(data.cFileName, L".") != 0 && wcscmp(data.cFileName, L"..") != 0) {
-            bloom_str name = bloom_fs_from_utf16(data.cFileName, -1);
+            bloom_str name = bloom_fs_from_utf16(data.cFileName, (int)wcslen(data.cFileName));
             bloom_arr_str_push_owned(result, name);
         }
         if (!FindNextFileW(h, &data)) {
