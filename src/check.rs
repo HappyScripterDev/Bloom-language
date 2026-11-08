@@ -1191,6 +1191,18 @@ impl Checker {
                 Some(crate::modules::BuiltinModule::Desktop) => {
                     self.register_desktop_functions(&m.name);
                 }
+                Some(crate::modules::BuiltinModule::Env) => {
+                    self.register_env_functions(&m.name);
+                }
+                Some(crate::modules::BuiltinModule::Collections) => {
+                    self.register_collections_functions(&m.name);
+                }
+                Some(crate::modules::BuiltinModule::Cli) => {
+                    self.register_cli_functions(&m.name);
+                }
+                Some(crate::modules::BuiltinModule::Io) => {
+                    self.register_io_functions(&m.name);
+                }
                 Some(crate::modules::BuiltinModule::Win32) => {
                     if cfg!(windows) {
                         self.register_win32_functions(&m.name);
@@ -3398,46 +3410,495 @@ impl Checker {
             self.register_builtin_fn(module, name, c_name, params, ret);
         }
     }
+    fn register_cli_functions(&mut self, module: &str) {
+        let span = Span::point(1, 1);
+        let structs: Vec<(&str, Type)> =
+            vec![("Command", Type::CliCommand), ("Parsed", Type::CliParsed)];
+        for (name, ty) in structs {
+            let canonical = format!("{}::{}", module, name);
+            self.structs.entry(canonical).or_insert_with(|| StructInfo {
+                params: Vec::new(),
+                fields: vec![StructField {
+                    name: "id".to_string(),
+                    ty,
+                }],
+                span,
+                module: module.to_string(),
+                is_pub: true,
+            });
+        }
+        let command_ty = Type::Struct(format!("{}::Command", module), Vec::new());
+        let parsed_ty = Type::Struct(format!("{}::Parsed", module), Vec::new());
+        let option_str = Type::Enum("Option".to_string(), vec![Type::String]);
+        let bool_err = Type::Enum("Result".to_string(), vec![Type::Bool, Type::String]);
+        let command_err = Type::Enum("Result".to_string(), vec![command_ty.clone(), Type::String]);
+        let parsed_err = Type::Enum("Result".to_string(), vec![parsed_ty.clone(), Type::String]);
+        let defs: Vec<(&str, &str, Vec<Type>, Type)> = vec![
+            (
+                "command",
+                "bloom_cli_new_command",
+                vec![Type::String, Type::String],
+                command_ty.clone(),
+            ),
+            (
+                "flag",
+                "bloom_cli_flag",
+                vec![command_ty.clone(), Type::String, Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "option",
+                "bloom_cli_option",
+                vec![
+                    command_ty.clone(),
+                    Type::String,
+                    Type::String,
+                    Type::String,
+                    Type::Bool,
+                ],
+                bool_err.clone(),
+            ),
+            (
+                "argument",
+                "bloom_cli_argument",
+                vec![command_ty.clone(), Type::String, Type::String, Type::Bool],
+                bool_err.clone(),
+            ),
+            (
+                "subcommand",
+                "bloom_cli_subcommand",
+                vec![command_ty.clone(), Type::String, Type::String],
+                command_err.clone(),
+            ),
+            (
+                "parse",
+                "bloom_cli_parse",
+                vec![command_ty.clone(), Type::Array(Box::new(Type::String))],
+                parsed_err.clone(),
+            ),
+            (
+                "has",
+                "bloom_cli_has",
+                vec![parsed_ty.clone(), Type::String],
+                Type::Bool,
+            ),
+            (
+                "value",
+                "bloom_cli_value",
+                vec![parsed_ty.clone(), Type::String],
+                option_str.clone(),
+            ),
+            (
+                "positional",
+                "bloom_cli_positional",
+                vec![parsed_ty.clone(), Type::Int],
+                option_str.clone(),
+            ),
+            (
+                "subcommand_name",
+                "bloom_cli_subcommand_name",
+                vec![parsed_ty.clone()],
+                option_str,
+            ),
+            (
+                "help",
+                "bloom_cli_help",
+                vec![command_ty.clone()],
+                Type::String,
+            ),
+        ];
+        for (name, c_name, params, ret) in defs {
+            self.register_builtin_fn(module, name, c_name, params, ret);
+        }
+    }
+    fn register_io_functions(&mut self, module: &str) {
+        let bool_err = Type::Enum("Result".to_string(), vec![Type::Bool, Type::String]);
+        let str_err = Type::Enum("Result".to_string(), vec![Type::String, Type::String]);
+        let option_str = Type::Enum("Option".to_string(), vec![Type::String]);
+        let line_result = Type::Enum("Result".to_string(), vec![option_str, Type::String]);
+        let defs: Vec<(&str, &str, Vec<Type>, Type)> = vec![
+            (
+                "stdout_write",
+                "bloom_io_stdout_write",
+                vec![Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "stderr_write",
+                "bloom_io_stderr_write",
+                vec![Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "stdout_flush",
+                "bloom_io_stdout_flush",
+                vec![],
+                bool_err.clone(),
+            ),
+            (
+                "stderr_flush",
+                "bloom_io_stderr_flush",
+                vec![],
+                bool_err.clone(),
+            ),
+            ("read_line", "bloom_io_read_line", vec![], line_result),
+            (
+                "read_stdin",
+                "bloom_io_read_stdin",
+                vec![Type::Int],
+                str_err,
+            ),
+        ];
+        for (name, c_name, params, ret) in defs {
+            self.register_builtin_fn(module, name, c_name, params, ret);
+        }
+    }
+    fn register_env_functions(&mut self, module: &str) {
+        let option_str = Type::Enum("Option".to_string(), vec![Type::String]);
+        let bool_err = Type::Enum("Result".to_string(), vec![Type::Bool, Type::String]);
+        let str_err = Type::Enum("Result".to_string(), vec![Type::String, Type::String]);
+        let args_ty = Type::Array(Box::new(Type::String));
+        let defs: Vec<(&str, &str, Vec<Type>, Type)> = vec![
+            ("args", "bloom_env_args", vec![], args_ty),
+            (
+                "get",
+                "bloom_env_get",
+                vec![Type::String],
+                option_str.clone(),
+            ),
+            ("has", "bloom_env_has", vec![Type::String], Type::Bool),
+            (
+                "set",
+                "bloom_env_set",
+                vec![Type::String, Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "remove",
+                "bloom_env_remove",
+                vec![Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "current_dir",
+                "bloom_env_current_dir",
+                vec![],
+                str_err.clone(),
+            ),
+            (
+                "set_current_dir",
+                "bloom_env_set_current_dir",
+                vec![Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "executable_path",
+                "bloom_env_executable_path",
+                vec![],
+                str_err.clone(),
+            ),
+            ("os", "bloom_env_os", vec![], Type::String),
+            ("arch", "bloom_env_arch", vec![], Type::String),
+            ("process_id", "bloom_env_process_id", vec![], Type::Int),
+        ];
+        for (name, c_name, params, ret) in defs {
+            self.register_builtin_fn(module, name, c_name, params, ret);
+        }
+    }
+
+    fn register_collections_functions(&mut self, module: &str) {
+        let span = Span::point(1, 1);
+        let struct_defs: Vec<(&str, Type)> =
+            vec![("List", Type::List), ("Map", Type::Map), ("Set", Type::Set)];
+        for (name, ty) in struct_defs {
+            let canonical = format!("{}::{}", module, name);
+            self.structs.entry(canonical).or_insert_with(|| StructInfo {
+                params: Vec::new(),
+                fields: vec![StructField {
+                    name: "id".to_string(),
+                    ty,
+                }],
+                span,
+                module: module.to_string(),
+                is_pub: true,
+            });
+        }
+        let list_ty = Type::Struct(format!("{}::List", module), Vec::new());
+        let map_ty = Type::Struct(format!("{}::Map", module), Vec::new());
+        let set_ty = Type::Struct(format!("{}::Set", module), Vec::new());
+        let bool_err = Type::Enum("Result".to_string(), vec![Type::Bool, Type::String]);
+        let str_err = Type::Enum("Result".to_string(), vec![Type::String, Type::String]);
+        let opt_str = Type::Enum("Option".to_string(), vec![Type::String]);
+        let str_arr = Type::Array(Box::new(Type::String));
+        let defs: Vec<(&str, &str, Vec<Type>, Type)> = vec![
+            (
+                "list_new",
+                "bloom_collections_list_new",
+                vec![],
+                list_ty.clone(),
+            ),
+            (
+                "list_push",
+                "bloom_collections_list_push",
+                vec![list_ty.clone(), Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "list_get",
+                "bloom_collections_list_get",
+                vec![list_ty.clone(), Type::Int],
+                str_err.clone(),
+            ),
+            (
+                "list_set",
+                "bloom_collections_list_set",
+                vec![list_ty.clone(), Type::Int, Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "list_insert",
+                "bloom_collections_list_insert",
+                vec![list_ty.clone(), Type::Int, Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "list_remove",
+                "bloom_collections_list_remove",
+                vec![list_ty.clone(), Type::Int],
+                str_err.clone(),
+            ),
+            (
+                "list_clear",
+                "bloom_collections_list_clear",
+                vec![list_ty.clone()],
+                Type::Bool,
+            ),
+            (
+                "list_len",
+                "bloom_collections_list_len",
+                vec![list_ty.clone()],
+                Type::Int,
+            ),
+            (
+                "list_capacity",
+                "bloom_collections_list_capacity",
+                vec![list_ty.clone()],
+                Type::Int,
+            ),
+            (
+                "list_values",
+                "bloom_collections_list_values",
+                vec![list_ty.clone()],
+                str_arr.clone(),
+            ),
+            (
+                "map_new",
+                "bloom_collections_map_new",
+                vec![],
+                map_ty.clone(),
+            ),
+            (
+                "map_insert",
+                "bloom_collections_map_insert",
+                vec![map_ty.clone(), Type::String, Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "map_get",
+                "bloom_collections_map_get",
+                vec![map_ty.clone(), Type::String],
+                opt_str.clone(),
+            ),
+            (
+                "map_has",
+                "bloom_collections_map_has",
+                vec![map_ty.clone(), Type::String],
+                Type::Bool,
+            ),
+            (
+                "map_remove",
+                "bloom_collections_map_remove",
+                vec![map_ty.clone(), Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "map_keys",
+                "bloom_collections_map_keys",
+                vec![map_ty.clone()],
+                str_arr.clone(),
+            ),
+            (
+                "map_values",
+                "bloom_collections_map_values",
+                vec![map_ty.clone()],
+                str_arr.clone(),
+            ),
+            (
+                "map_len",
+                "bloom_collections_map_len",
+                vec![map_ty.clone()],
+                Type::Int,
+            ),
+            (
+                "map_clear",
+                "bloom_collections_map_clear",
+                vec![map_ty.clone()],
+                Type::Bool,
+            ),
+            (
+                "set_new",
+                "bloom_collections_set_new",
+                vec![],
+                set_ty.clone(),
+            ),
+            (
+                "set_insert",
+                "bloom_collections_set_insert",
+                vec![set_ty.clone(), Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "set_has",
+                "bloom_collections_set_has",
+                vec![set_ty.clone(), Type::String],
+                Type::Bool,
+            ),
+            (
+                "set_remove",
+                "bloom_collections_set_remove",
+                vec![set_ty.clone(), Type::String],
+                bool_err.clone(),
+            ),
+            (
+                "set_values",
+                "bloom_collections_set_values",
+                vec![set_ty.clone()],
+                str_arr,
+            ),
+            (
+                "set_len",
+                "bloom_collections_set_len",
+                vec![set_ty.clone()],
+                Type::Int,
+            ),
+            (
+                "set_clear",
+                "bloom_collections_set_clear",
+                vec![set_ty.clone()],
+                Type::Bool,
+            ),
+        ];
+        for (name, c_name, params, ret) in defs {
+            self.register_builtin_fn(module, name, c_name, params, ret);
+        }
+    }
     fn register_process_functions(&mut self, module: &str) {
         let span = Span::point(1, 1);
-        let canonical = format!("{}::ProcessOutput", module);
-        self.structs.entry(canonical).or_insert_with(|| StructInfo {
-            params: Vec::new(),
-            fields: vec![
-                StructField {
-                    name: "exit_code".to_string(),
-                    ty: Type::Int,
-                },
-                StructField {
-                    name: "stdout".to_string(),
-                    ty: Type::String,
-                },
-                StructField {
-                    name: "stderr".to_string(),
-                    ty: Type::String,
-                },
-            ],
-            span,
-            module: module.to_string(),
-            is_pub: true,
-        });
+        let structs: Vec<(&str, Vec<(&str, Type)>)> = vec![
+            (
+                "ProcessOutput",
+                vec![
+                    ("exit_code", Type::Int),
+                    ("stdout", Type::String),
+                    ("stderr", Type::String),
+                ],
+            ),
+            ("Process", vec![("id", Type::ProcessHandle)]),
+            (
+                "ProcessOptions",
+                vec![
+                    ("directory", Type::String),
+                    ("timeout_ms", Type::Int),
+                    ("max_output", Type::Int),
+                ],
+            ),
+        ];
+        for (name, fields) in structs {
+            let canonical = format!("{}::{}", module, name);
+            let fields = fields
+                .into_iter()
+                .map(|(n, ty)| StructField {
+                    name: n.to_string(),
+                    ty,
+                })
+                .collect();
+            self.structs.entry(canonical).or_insert_with(|| StructInfo {
+                params: Vec::new(),
+                fields,
+                span,
+                module: module.to_string(),
+                is_pub: true,
+            });
+        }
         let out = Type::Struct(format!("{}::ProcessOutput", module), Vec::new());
+        let child = Type::Struct(format!("{}::Process", module), Vec::new());
+        let options = Type::Struct(format!("{}::ProcessOptions", module), Vec::new());
+        let str_arr = Type::Array(Box::new(Type::String));
+        let out_err = Type::Enum("Result".to_string(), vec![out.clone(), Type::String]);
+        let child_err = Type::Enum("Result".to_string(), vec![child.clone(), Type::String]);
+        let bool_err = Type::Enum("Result".to_string(), vec![Type::Bool, Type::String]);
+        let option_int = Type::Enum("Option".to_string(), vec![Type::Int]);
         let defs: Vec<(&str, &str, Vec<Type>, Type)> = vec![
             (
                 "run",
                 "bloom_process_run",
-                vec![Type::String, Type::Array(Box::new(Type::String))],
-                Type::Enum("Result".to_string(), vec![out.clone(), Type::String]),
+                vec![Type::String, str_arr.clone()],
+                out_err.clone(),
             ),
             (
                 "run_in",
                 "bloom_process_run_in",
-                vec![
-                    Type::String,
-                    Type::Array(Box::new(Type::String)),
-                    Type::String,
-                ],
-                Type::Enum("Result".to_string(), vec![out, Type::String]),
+                vec![Type::String, str_arr.clone(), Type::String],
+                out_err.clone(),
+            ),
+            (
+                "run_options",
+                "bloom_process_run_options",
+                vec![Type::String, str_arr.clone(), options.clone()],
+                out_err.clone(),
+            ),
+            (
+                "spawn",
+                "bloom_process_spawn",
+                vec![Type::String, str_arr, options.clone()],
+                child_err.clone(),
+            ),
+            (
+                "wait",
+                "bloom_process_wait",
+                vec![child.clone()],
+                out_err.clone(),
+            ),
+            (
+                "try_wait",
+                "bloom_process_try_wait",
+                vec![child.clone()],
+                option_int,
+            ),
+            ("kill", "bloom_process_kill", vec![child.clone()], bool_err),
+            (
+                "exit_code",
+                "bloom_process_output_exit_code",
+                vec![out.clone()],
+                Type::Int,
+            ),
+            (
+                "success",
+                "bloom_process_output_success",
+                vec![out.clone()],
+                Type::Bool,
+            ),
+            (
+                "stdout",
+                "bloom_process_output_stdout",
+                vec![out.clone()],
+                Type::String,
+            ),
+            (
+                "stderr",
+                "bloom_process_output_stderr",
+                vec![out],
+                Type::String,
             ),
         ];
         for (name, c_name, params, ret) in defs {

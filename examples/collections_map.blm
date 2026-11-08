@@ -1,0 +1,35 @@
+// String-Map: Schlüssel-Wert-Paare mit Ersetzen und Entfernen.
+use std::collections;
+
+fn run() -> Result<int, string> {
+    let map = collections::map_new();
+    collections::map_insert(map, "name", "Bloom")?;
+    collections::map_insert(map, "version", "0.23")?;
+    println("replace=" + str(collections::map_insert(map, "name", "Bloom 0.23")?));
+    println("len=" + str(collections::map_len(map)));
+    match collections::map_get(map, "name") {
+        Option::Some(v) => println("name=" + v),
+        Option::None => println("name=missing")
+    };
+    println("has=" + str(collections::map_has(map, "version")));
+    println("keys=" + join(collections::map_keys(map), ","));
+    println("values=" + join(collections::map_values(map), ","));
+    collections::map_remove(map, "version")?;
+    println("has-after-remove=" + str(collections::map_has(map, "version")));
+    println("len2=" + str(collections::map_len(map)));
+    collections::map_clear(map);
+    println("after-clear=" + str(collections::map_len(map)));
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

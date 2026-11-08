@@ -120,6 +120,18 @@ pub enum Type {
     Ui,
     /// Internal handle to a native window (`std::desktop::Window`).
     DesktopWindow,
+    /// Internal handle to a string list (`std::collections::List`).
+    List,
+    /// Internal handle to a string map (`std::collections::Map`).
+    Map,
+    /// Internal handle to a string set (`std::collections::Set`).
+    Set,
+    /// Internal handle to a spawned process (`std::process::Process`).
+    ProcessHandle,
+    /// Internal handle to a CLI command definition (`std::cli::Command`).
+    CliCommand,
+    /// Internal handle to parsed CLI arguments (`std::cli::Parsed`).
+    CliParsed,
 }
 
 impl Type {
@@ -195,6 +207,12 @@ pub fn mangle_type(ty: &Type) -> String {
         Type::Limiter => "auth_limiter".to_string(),
         Type::Ui => "ui".to_string(),
         Type::DesktopWindow => "desktop_window".to_string(),
+        Type::List => "list".to_string(),
+        Type::Map => "map".to_string(),
+        Type::Set => "set".to_string(),
+        Type::ProcessHandle => "process_handle".to_string(),
+        Type::CliCommand => "cli_command".to_string(),
+        Type::CliParsed => "cli_parsed".to_string(),
         Type::Param(name) => c_ident(name),
     }
 }
@@ -224,6 +242,12 @@ impl fmt::Display for Type {
             Type::Limiter => write!(f, "std::auth::Limiter"),
             Type::Ui => write!(f, "std::ui::UiNode"),
             Type::DesktopWindow => write!(f, "std::desktop::Window"),
+            Type::List => write!(f, "std::collections::List"),
+            Type::Map => write!(f, "std::collections::Map"),
+            Type::Set => write!(f, "std::collections::Set"),
+            Type::ProcessHandle => write!(f, "std::process::Process"),
+            Type::CliCommand => write!(f, "std::cli::Command"),
+            Type::CliParsed => write!(f, "std::cli::Parsed"),
             Type::Struct(name, args) => {
                 if args.is_empty() {
                     write!(f, "{}", name)

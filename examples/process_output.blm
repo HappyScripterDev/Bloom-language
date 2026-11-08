@@ -1,0 +1,28 @@
+// stdout, stderr und Exitcode getrennt auswerten.
+use std::process;
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let options = process::ProcessOptions {
+        directory: "",
+        timeout_ms: 5000,
+        max_output: 1048576
+    };
+    let out = process::run_options("C:\\Windows\\System32\\cmd.exe", ["/C", "echo standard & echo fehler 1>&2 & exit 7"], options)?;
+    println("exit=" + str(process::exit_code(out)));
+    println("success=" + str(process::success(out)));
+    print("stdout=" + process::stdout(out));
+    print("stderr=" + process::stderr(out));
+    return Result::Ok(0);
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

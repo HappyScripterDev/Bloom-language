@@ -52,6 +52,10 @@ manchmal durchscheinen, aber damit kann ich leben.
 | `runtime/bloom_ui.c` | `std::ui`-Implementierung (Komponentenbaum, Validierung, Renderer); CSS als eingebetteter C-String |
 | `runtime/bloom_ui.css` | Stylesheet-Quelle für `std::ui` (Design-Tokens, Light/Dark/System, Komponenten) |
 | `runtime/bloom_desktop.c` | `std::desktop`-Implementierung (Win32-Fenster, Controls, Ereignisschleife, DPI/UTF-16) |
+| `runtime/bloom_env.c` | `std::env` (Argumente, Umgebung, cwd, Exe-Pfad; Windows Unicode-APIs) |
+| `runtime/bloom_collections.c` | `std::collections` (String-List/Map/Set, refcountet, Kapazitätslimits) |
+| `runtime/bloom_cli.c` | `std::cli` (Command/Parsed, Parser, Subcommands, Hilfe) |
+| `runtime/bloom_io.c` | `std::io` (UTF-8-Textausgabe, Flush, read_line/read_stdin) |
 | `runtime/bloom_json.c` | `std::json`-Implementierung (RFC-8259-Parser, refcountetes Wertmodell, Serializer) |
 | `tests/e2e.rs` | Integrationstests über die echte CLI |
 
@@ -59,8 +63,9 @@ manchmal durchscheinen, aber damit kann ich leben.
 
 `std::math`, `std::fs`, `std::process`, `std::time`, `std::win32`,
 `std::net`, `std::tls`, `std::http`, `std::path`, `std::json`,
-`std::web`, `std::html`, `std::db`, `std::auth`, `std::ui` und
-`std::desktop` haben **keine
+`std::web`, `std::html`, `std::db`, `std::auth`, `std::ui`,
+`std::desktop`, `std::env`, `std::collections`, `std::cli` und
+`std::io` haben **keine
 Quelldatei**. Der Modul-Loader erkennt die Pfade (`builtin_module`) und legt
 ein leeres Modul mit `BuiltinModule`-Marker an. Der Checker registriert
 dafür:
@@ -81,7 +86,9 @@ vom internen Typ `Type::Web`) sowie `std::web::Match` (Felder `status`,
 Options-Structs `std::ui::ButtonOptions`, `InputOptions`, `FormOptions`,
 `PageOptions` und `TableOptions`; außerdem `std::desktop::Window`
 (`Type::DesktopWindow`, Feld `id`), `Event` (`kind`, `control`, `text`,
-`checked`), `Bounds` und `Size`.
+`checked`), `Bounds` und `Size`; `std::collections::List/Map/Set`
+(`Type::List/Map/Set`), `std::process::Process` (`Type::ProcessHandle`)
+und `std::cli::Command/Parsed` (`Type::CliCommand/CliParsed`).
 
 Codegen überspringt Prototypen für `std::*`-Funktionen, emittiert die
 C-Implementierung nur für tatsächlich geladene Module (nach den
@@ -319,7 +326,8 @@ Unter Nicht-Windows enthält die Datei Stubs, die `available() = false`
 liefern und sonst `Err` zurückgeben; es werden keine Win32-Bibliotheken
 gelinkt.
 
-`auto_links` ergänzt unter Windows `user32`, `gdi32` und `comdlg32`.
+`auto_links` ergänzt unter Windows `user32`, `gdi32`, `comdlg32` und
+`shell32` (für `std::env`/CommandLineToArgvW).
 Erkennt
 `prepare` `std::desktop`, setzt `Prepared.uses_desktop`; der
 MSVC-Linkaufruf erhält dann `/link /SUBSYSTEM:WINDOWS
@@ -821,7 +829,12 @@ nativer Kopfsemantik dargestellt.
   (inkl. deaktiviertem Eintrag), Tastatur-Tab/Shift+Tab, Message-Box,
   Dateidialog-Abbruch, DPI-/Größenumrechnung, Queue-Überlauf,
   Thread-Probe, Fehler-/Lebensdauerpfade, alle zehn 0.22-Beispiele,
-  PE-Subsystem (`WINDOWS` vs. `CONSOLE`) und `--emit-c`. Fehlt
+  PE-Subsystem (`WINDOWS` vs. `CONSOLE`) und `--emit-c`. Ab 0.23:
+  `std::env` (Unicode, leere Werte, cwd), Collections (Wachstum,
+  Indizes, Leaks), CLI (Flags/Optionen/Subcommands/Defaults/Fehler),
+  Prozesse (Quoting, Timeout, Ausgabelimit, Spawn/Kill, fehlende
+  Programme), `std::io` (Zeilen/EOF/UTF-8) und die zwölf neuen
+  Beispiele. Fehlt
   ein C-Compiler, überspringen sich die betroffenen Tests mit Hinweis.
 
 ## Bewusste Entwurfsentscheidungen

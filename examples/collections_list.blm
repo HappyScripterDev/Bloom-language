@@ -1,0 +1,35 @@
+// Dynamische String-Liste.
+use std::collections;
+
+fn run() -> Result<int, string> {
+    let list = collections::list_new();
+    collections::list_push(list, "eins")?;
+    collections::list_push(list, "zwei")?;
+    collections::list_insert(list, 1, "mitte")?;
+    println("len=" + str(collections::list_len(list)));
+    println("values=" + join(collections::list_values(list), ","));
+    println("get=" + collections::list_get(list, 1)?);
+    let removed = collections::list_remove(list, 0)?;
+    println("removed=" + removed);
+    collections::list_set(list, 0, "neu")?;
+    println("after-set=" + join(collections::list_values(list), ","));
+    match collections::list_get(list, 99) {
+        Result::Ok(_) => println("bad-index=accepted"),
+        Result::Err(_) => println("bad-index=rejected")
+    };
+    collections::list_clear(list);
+    println("after-clear=" + str(collections::list_len(list)));
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

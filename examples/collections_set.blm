@@ -1,0 +1,30 @@
+// String-Set: eindeutige Werte sammeln.
+use std::collections;
+
+fn run() -> Result<int, string> {
+    let set = collections::set_new();
+    println("insert1=" + str(collections::set_insert(set, "apfel")?));
+    println("insert2=" + str(collections::set_insert(set, "apfel")?));
+    collections::set_insert(set, "birne")?;
+    collections::set_insert(set, "kirsche")?;
+    println("len=" + str(collections::set_len(set)));
+    println("has=" + str(collections::set_has(set, "birne")));
+    println("values=" + join(collections::set_values(set), ","));
+    collections::set_remove(set, "apfel")?;
+    println("after-remove=" + join(collections::set_values(set), ","));
+    collections::set_clear(set);
+    println("after-clear=" + str(collections::set_len(set)));
+    return Result::Ok(0);
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

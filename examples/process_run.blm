@@ -1,0 +1,21 @@
+// Externes Programm ohne Shell starten und Ausgabe lesen.
+use std::process;
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let out = process::run("C:\\Windows\\System32\\cmd.exe", ["/C", "echo Hallo aus einem Kindprozess"])?;
+    print(process::stdout(out));
+    println("exit=" + str(process::exit_code(out)));
+    return Result::Ok(0);
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

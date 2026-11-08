@@ -38,6 +38,10 @@ pub enum BuiltinModule {
     Auth,
     Ui,
     Desktop,
+    Env,
+    Collections,
+    Cli,
+    Io,
     Win32,
 }
 
@@ -60,6 +64,10 @@ pub fn builtin_module(path: &[String]) -> Option<(&'static str, BuiltinModule)> 
         "std::auth" => Some(("std::auth", BuiltinModule::Auth)),
         "std::ui" => Some(("std::ui", BuiltinModule::Ui)),
         "std::desktop" => Some(("std::desktop", BuiltinModule::Desktop)),
+        "std::env" => Some(("std::env", BuiltinModule::Env)),
+        "std::collections" => Some(("std::collections", BuiltinModule::Collections)),
+        "std::cli" => Some(("std::cli", BuiltinModule::Cli)),
+        "std::io" => Some(("std::io", BuiltinModule::Io)),
         "std::win32" => Some(("std::win32", BuiltinModule::Win32)),
         _ => None,
     }

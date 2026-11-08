@@ -15,7 +15,7 @@ schreiben kann: Dateien lesen, im Netzwerk reden, JSON verarbeiten,
 HTML-Seiten ausliefern. Alles davon ist schon eingebaut und braucht
 keine externen Bibliotheken.
 
-Stand: **0.22.0**. Getestet wird auf Windows (MSVC). Linux und macOS
+Stand: **0.23.0**. Getestet wird auf Windows (MSVC). Linux und macOS
 sind im Code vorgesehen, aber ich entwickle und teste fast nur auf
 Windows. `std::desktop` ist ausschließlich unter Windows verfügbar.
 
@@ -107,45 +107,38 @@ Wenn Bloom keinen C-Compiler findet, sagt es dir, was fehlt. Welchen
 es nimmt, kann man mit `BLOOM_CC` erzwingen (`set BLOOM_CC=clang`).
 Mehr dazu steht in [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
-## Was in 0.22 dazugekommen ist
+## Was in 0.23 dazugekommen ist
 
-- Native Layout-Engine: `row`/`column`-Container, Padding, Abstand,
-  feste und flexible Größen (Gewichte), Alignment, Verschachtelung bis
-  Tiefe 32 und automatische Neuberechnung bei `WM_SIZE` und
-  `WM_DPICHANGED`. Layouts sind fenstergebunden (IDs ab 10000), keine
-  separaten Handles nötig.
-- Drei neue native Controls: ComboBox (`combo_*`), mehrzeiliges
-  Textfeld (`text_area_create`, Zeilenenden werden LF/CRLF-normalisiert)
-  und ListBox (`list_*`) mit Hinzufügen, Entfernen, Anzahl, Auswahl und
-  ausgewähltem Text. Ungültige Indizes liefern `Err`.
-- Menüs: Menüleiste, Popup-Menüs, Einträge, Trennlinien und
-  Aktivieren/Deaktivieren. Menü-IDs liegen bei 1000+ und kollidieren
-  nicht mit Controls; Menü-Klicks erscheinen als `menu`-Events.
-- Dateidialoge: `open_file_dialog` und `save_file_dialog` über die
-  nativen Windows-Dialoge (Unicode-Pfade, Filter, Abbruch als
-  `Option::None`). `std::fs`/`std::path` bleiben für den eigentlichen
-  Dateizugriff zuständig.
-- Tastatur: Tab/Shift+Tab über die native Windows-Navigation
-  (`IsDialogMessage`), deaktivierte und versteckte Controls werden
-  übersprungen; `focused_control` liefert die aktuelle ID.
-- Robustere Ereignisse: Das Schließereignis geht nie verloren, wird
-  genau einmal geliefert und kommt nach bereits eingereihten Events.
-  Überlauf der 64-Platz-Warteschlange verwirft das älteste Ereignis und
-  zählt in `events_dropped`. Programmgesteuerte Textänderungen erzeugen
-  weiterhin keine `input`-Events.
-- DPI: `dpi_scale` für getestete Umrechnung; Layouts werden nach
-  Größen-/DPI-Änderungen neu angewendet. Die Grenzen (keine
-  automatische Control-Skalierung, keine echte Multi-Monitor-Prüfung)
-  sind dokumentiert.
-- Interne Test-Hooks: `debug_event_flood` und `debug_cross_thread`
-  (nicht Teil der stabilen API) für Queue- und Thread-Tests.
-- Beispiele: `desktop_layout_stack`, `desktop_resize`,
-  `desktop_combo_box`, `desktop_text_area`, `desktop_list_box`,
-  `desktop_menu`, `desktop_file_dialog`, `desktop_keyboard`,
-  `desktop_dpi`, `desktop_gallery`.
-- Behoben: Layout-Reihenfolge bei Spalten, geleakte Auswahl-Strings,
-  doppeltes Freigeben von Menüs/Layouts beim Schließen.
-
+- `std.env`: `args`, `get`, `has`, `set`, `remove`, `current_dir`,
+  `set_current_dir`, `executable_path`, `os`, `arch` und `process_id`.
+  Fehlende und leere Variablen bleiben unterscheidbar (leere Werte sind
+  unter Windows prozesslokal, da Windows sie nicht speichert).
+- `std.process` erweitert: `spawn`, `wait`, `try_wait`, `kill`,
+  `run_options` mit Arbeitsverzeichnis, Timeout (max. 24 h) und
+  Ausgabelimit (Standard 8 MiB, max. 64 MiB). Programme werden direkt
+  über `CreateProcessW` gestartet, Argumente einzeln mit den
+  MSVC-Quoting-Regeln übergeben – keine implizite Shell, keine
+  Verkettung von Benutzereingaben. stdout/stderr werden parallel
+  gelesen (kein Pipe-Deadlock); Timeout beendet den Kindprozess.
+- `std.cli`: Command/Parsed-Handles, Flags, Optionen, Positions-
+  argumente, Subcommands, Defaults, Pflichtfelder, `--name=value`,
+  `--`, kurze Flags, Hilfe als String. Der Parser beendet den Prozess
+  nie selbst; Fehler sind konkrete `Err`-Werte.
+- `std.collections`: `List`, `Map` und `Set` für Strings mit
+  Push/Pop/Get/Set/Insert/Remove/Clear/Length/Capacity (Liste),
+  Insert/Get/Has/Remove/Keys/Values/Length/Clear (Map) und
+  Insert/Has/Remove/Values/Length/Clear (Set). Alle Werte werden
+  referenzgezählt kopiert und freigegeben; Schlüssel sind nicht leer,
+  maximal 1 Mio. Einträge. **Noch nicht generisch** (nur Strings).
+- `std.io`: explizite Textausgabe auf stdout/stderr, Flush,
+  `read_line` (EOF getrennt von Leerzeile) und `read_stdin` mit Limit;
+  ungültiges UTF-8 wird gemeldet.
+- Beispiele: `env_info`, `cli_basic`, `cli_subcommands`,
+  `process_run`, `process_output`, `process_timeout`,
+  `collections_list`, `collections_map`, `collections_set`,
+  `automation_build`, `automation_project`, `bloom_task_runner`.
+- Behoben: leere Umgebungswerte, Auswahl-Leck im Map/Set-Lookup,
+  CLI-Defaults werden beim Parsen materialisiert.
 ## Was (noch) nicht geht
 
 Damit hier keine falschen Erwartungen entstehen:
@@ -169,6 +162,21 @@ Damit hier keine falschen Erwartungen entstehen:
   fokussierten Button funktioniert). Screenreader-/Multi-Monitor-Tests
   fehlen; Dateidialog-Erfolgspfade wurden manuell geprüft, automatisiert
   ist der Abbruchpfad.
+- Collections sind in 0.23 auf Strings beschränkt; generische
+  `List<T>`/`Map<K,V>`/`Set<T>` folgen erst mit einem ausgebauten
+  Genericsystem.
+- Neue Prozess-APIs (`spawn`/`wait`/`try_wait`/`kill`/`run_options`)
+  sind unter Windows implementiert; POSIX nutzt weiterhin `run`/`run_in`.
+  Environment-Overrides und stdin-Umleitung fehlen in 0.23. Timeouts
+  beenden den direkten Kindprozess, keine Job-Objekte (kein Baum-Kill).
+- CLI unterstützt eine Subcommand-Ebene; Optionen vor dem Subcommand
+  werden nicht unterstützt. `--help`/`--version` sind explizit zu
+  registrieren.
+- Leere Umgebungswerte werden unter Windows prozesslokal simuliert und
+  nicht an Kindprozesse vererbt; Umgebungsänderungen sind nicht
+  thread-sicher.
+- `std::io` arbeitet mit UTF-8-Text; Konsole-Codepages und rohe
+  Byte-Ströme auf stdin werden nicht automatisch konvertiert.
 - Kein OAuth/OIDC, keine MFA, keine E-Mail-Verifikation, kein
   Passwort-Reset per E-Mail, kein JWT.
 - Die Sprache ist 0.x. Ich ändere APIs auch mal, wenn es sein muss.
@@ -189,7 +197,7 @@ Damit hier keine falschen Erwartungen entstehen:
 ## Selbst entwickeln
 
 ```bash
-cargo test                    # 538 Tests: Unit + echte kompilierte Programme
+cargo test                    # 545 Tests: Unit + echte kompilierte Programme
 cargo clippy --all-targets
 cargo fmt
 ```
@@ -213,6 +221,8 @@ bloom run examples/web_csrf_form.blm
 bloom run examples/ui_hello.blm
 bloom run examples/desktop_hello.blm
 bloom run examples/desktop_gallery.blm
+bloom run examples/cli_basic.blm -- --verbose --target linux datei.txt
+bloom run examples/process_output.blm
 ```
 
 ## Lizenz

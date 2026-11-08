@@ -1195,6 +1195,96 @@ Wichtige Regeln:
 - Dateidialog-Erfolgspfade sind manuell geprüft; automatisiert ist der
   Abbruchpfad.
 
+## 16h. Kommandozeile, Prozesse und Automatisierung (0.23)
+
+Neue Module: `std::env`, `std::cli`, `std::process` (erweitert),
+`std::collections` und `std::io`.
+
+```powershell
+cargo build --release
+.\target\release\bloom.exe build examples\cli_basic.blm
+.\examples\cli_basic.exe --verbose --target linux datei.txt
+```
+
+Ein eigenes CLI-Werkzeug:
+
+```bloom
+use std::cli;
+use std::env;
+
+fn run() -> Result<int, string> {
+    let cmd = cli::command("mytool", "Beispiel");
+    cli::flag(cmd, "verbose", "mehr ausgeben")?;
+    cli::option(cmd, "target", "Ziel", "windows", false)?;
+    cli::argument(cmd, "input", "Eingabe", true)?;
+    let args = env::args();
+    let argv = slice(args, 1, len(args));
+    match cli::parse(cmd, argv) {
+        Result::Ok(parsed) => show(parsed),
+        Result::Err(e) => {
+            println("Fehler: " + e);
+            println(cli::help(cmd));
+        }
+    };
+    return Result::Ok(0);
+}
+
+fn show(parsed: cli::Parsed) -> void {
+    println("verbose=" + str(cli::has(parsed, "verbose")));
+    match cli::value(parsed, "target") {
+        Option::Some(v) => println("target=" + v),
+        Option::None => println("target=windows")
+    };
+    match cli::positional(parsed, 0) {
+        Option::Some(v) => println("input=" + v),
+        Option::None => println("input=fehlt")
+    };
+}
+```
+
+Die Programme werden **ohne Shell** gestartet. Argumente sind eine
+getrennte Liste; Windows erhält eine korrekt quotierte Befehlszeile:
+
+```bloom
+use std::process;
+
+let out = process::run(
+    "C:\\Windows\\System32\\cmd.exe",
+    ["/C", "echo Hallo"]
+)?;
+print(process::stdout(out));
+println("exit=" + str(process::exit_code(out)));
+```
+
+Mit Timeout und Ausgabelimit:
+
+```bloom
+let options = process::ProcessOptions {
+    directory: "",
+    timeout_ms: 2000,
+    max_output: 1048576
+};
+let out = process::run_options("programm.exe", ["--flag", "wert mit leerzeichen"], options)?;
+```
+
+- `spawn` startet asynchron; `wait`, `try_wait` und `kill` verwalten den
+  Kindprozess. `Process` gibt seine Handles beim Scope-Ende frei.
+- Timeout beendet den direkten Kindprozess; es gibt kein Job-Objekt.
+- Ausgabe über dem Limit liefert einen Fehler, keine stille Kürzung.
+- `std::collections` enthält `List`, `Map`, `Set` für Strings:
+  `list_push`, `list_get`, `map_insert`, `map_get`, `set_insert` usw.
+- `std::io` bietet explizite Textausgabe, Flush, `read_line` und
+  `read_stdin` mit Limit.
+
+### Grenzen
+
+- Collections sind noch nicht generisch (nur Strings).
+- Neue Prozess-APIs gibt es nur unter Windows; POSIX nutzt `run`.
+- Keine Environment-Overrides oder stdin-Umleitung bei Prozessen.
+- CLI: eine Subcommand-Ebene, kein automatisches `--help`.
+- Leere Umgebungsvariablen werden unter Windows prozesslokal
+  simuliert.
+
 ## 17. HTTPS
 
 ```bloom

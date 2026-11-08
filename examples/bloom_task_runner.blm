@@ -1,0 +1,45 @@
+// Kleiner Task-Runner: Konfiguration aus einer Textdatei, Aufgaben nacheinander.
+// Jede Zeile: programm|argument1|argument2...
+use std::env;
+use std::fs;
+use std::process;
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let base = env::current_dir()?;
+    let config = fs::join_path(base, "bloom_tasks_" + str(env::process_id()) + ".txt");
+    fs::write_text(config, "C:\\Windows\\System32\\cmd.exe|/C|echo Aufgabe 1\nC:\\Windows\\System32\\cmd.exe|/C|echo Aufgabe 2\n")?;
+    let text = fs::read_text(config)?;
+    let lines = split(text, "\n");
+    var index: int = 0;
+    while index < len(lines) {
+        let line = trim(lines[index]);
+        if len(line) > 0 {
+            run_task(line);
+        }
+        index = index + 1;
+    }
+    fs::remove_file(config)?;
+    return Result::Ok(0);
+}
+
+fn run_task(line: string) -> void {
+    let parts = split(line, "|");
+    let program = parts[0];
+    let args = slice(parts, 1, len(parts));
+    match process::run(program, args) {
+        Result::Ok(out) => println("task-exit=" + str(process::exit_code(out))),
+        Result::Err(e) => println("task-error=" + e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

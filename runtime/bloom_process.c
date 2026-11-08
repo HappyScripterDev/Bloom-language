@@ -534,3 +534,543 @@ bloom_enum_Result_std_process_ProcessOutput_str bloom_process_run(
     empty.len = 0;
     return bloom_process_run_in(program, args, empty);
 }
+
+/* ---- 0.23: spawn, wait, timeout and output limits --------------------- */
+
+#ifdef _WIN32
+
+typedef struct {
+    HANDLE pipe;
+    bloom_process_buf buf;
+    size_t limit;
+    bool overflow;
+} bloom_process_reader;
+
+typedef struct {
+    int rc;
+    HANDLE process;
+    bloom_process_reader out_reader;
+    bloom_process_reader err_reader;
+    HANDLE out_thread;
+    HANDLE err_thread;
+    int64_t timeout_ms;
+    bool finished;
+    DWORD exit_code;
+} bloom_process_child;
+
+static DWORD WINAPI bloom_process_reader_main(LPVOID param) {
+    bloom_process_reader *r = (bloom_process_reader *)param;
+    char tmp[4096];
+    DWORD got = 0;
+    while (ReadFile(r->pipe, tmp, sizeof tmp, &got, NULL) && got > 0) {
+        size_t room = r->buf.len < r->limit ? r->limit - r->buf.len : 0;
+        if (got <= room) {
+            bloom_process_buf_push(&r->buf, tmp, (size_t)got);
+        } else {
+            if (room > 0) {
+                bloom_process_buf_push(&r->buf, tmp, room);
+            }
+            r->overflow = true;
+        }
+    }
+    CloseHandle(r->pipe);
+    r->pipe = NULL;
+    return 0;
+}
+
+static bloom_process_child *bloom_process_child_from(bloom_process_handle h) {
+    return (bloom_process_child *)(intptr_t)h;
+}
+
+bloom_process_handle bloom_process_child_retain(bloom_process_handle h) {
+    bloom_process_child *child = bloom_process_child_from(h);
+    if (child != NULL) {
+        child->rc++;
+    }
+    return h;
+}
+
+static void bloom_process_child_finalize(bloom_process_child *child) {
+    if (child == NULL) {
+        return;
+    }
+    if (child->process != NULL) {
+        DWORD code = 0;
+        if (WaitForSingleObject(child->process, 0) == WAIT_OBJECT_0) {
+            GetExitCodeProcess(child->process, &code);
+            child->exit_code = code;
+            child->finished = true;
+        }
+    }
+    if (child->out_thread != NULL) {
+        WaitForSingleObject(child->out_thread, INFINITE);
+        CloseHandle(child->out_thread);
+        child->out_thread = NULL;
+    }
+    if (child->err_thread != NULL) {
+        WaitForSingleObject(child->err_thread, INFINITE);
+        CloseHandle(child->err_thread);
+        child->err_thread = NULL;
+    }
+    if (child->process != NULL) {
+        DWORD code = 0;
+        GetExitCodeProcess(child->process, &code);
+        child->exit_code = code;
+        CloseHandle(child->process);
+        child->process = NULL;
+        child->finished = true;
+    }
+}
+
+void bloom_process_child_release(bloom_process_handle *h) {
+    if (h == NULL || *h == 0) {
+        return;
+    }
+    bloom_process_child *child = bloom_process_child_from(*h);
+    *h = 0;
+    if (child == NULL) {
+        return;
+    }
+    if (child->rc > 0) {
+        child->rc--;
+    }
+    if (child->rc != 0) {
+        return;
+    }
+    if (!child->finished && child->process != NULL
+        && WaitForSingleObject(child->process, 0) == WAIT_TIMEOUT) {
+        TerminateProcess(child->process, 1);
+    }
+    bloom_process_child_finalize(child);
+    bloom_process_buf_free(&child->out_reader.buf);
+    bloom_process_buf_free(&child->err_reader.buf);
+    free(child);
+}
+
+static bloom_struct_std_process_Process bloom_process_wrap_child(
+    bloom_process_child *child
+) {
+    bloom_struct_std_process_Process v;
+    v.f_id = (bloom_process_handle)(intptr_t)child;
+    return v;
+}
+
+bloom_enum_Result_std_process_Process_str bloom_process_spawn(
+    bloom_str program,
+    bloom_arr_str args,
+    bloom_struct_std_process_ProcessOptions options
+) {
+    bloom_enum_Result_std_process_Process_str r;
+    size_t limit = 8 * 1024 * 1024;
+    if (options.f_max_output > 0) {
+        limit = (size_t)options.f_max_output;
+    }
+    if (limit > 64 * 1024 * 1024) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_str_from_bytes(
+            "spawn: max_output exceeds 67108864 bytes",
+            43
+        );
+        return r;
+    }
+    if (options.f_timeout_ms < 0 || options.f_timeout_ms > 86400000) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_str_from_bytes(
+            "spawn: timeout_ms must be between 0 and 86400000",
+            50
+        );
+        return r;
+    }
+    wchar_t *wprog = bloom_process_to_utf16(program);
+    if (wprog == NULL) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_process_win_err("spawn", program, ERROR_INVALID_NAME);
+        return r;
+    }
+    wchar_t *wline = bloom_process_build_cmdline(wprog, args);
+    if (wline == NULL) {
+        free(wprog);
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_process_win_err("spawn", program, ERROR_INVALID_NAME);
+        return r;
+    }
+    wchar_t *wcwd = NULL;
+    if (options.f_directory.len > 0) {
+        wcwd = bloom_process_to_utf16(options.f_directory);
+        if (wcwd == NULL) {
+            free(wprog);
+            free(wline);
+            r.tag = 1;
+            r.data.m_Err._0 = bloom_process_win_err(
+                "spawn",
+                options.f_directory,
+                ERROR_INVALID_NAME
+            );
+            return r;
+        }
+    }
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof sa;
+    sa.lpSecurityDescriptor = NULL;
+    sa.bInheritHandle = TRUE;
+    HANDLE out_read = NULL;
+    HANDLE out_write = NULL;
+    HANDLE err_read = NULL;
+    HANDLE err_write = NULL;
+    if (!CreatePipe(&out_read, &out_write, &sa, 0)
+        || !CreatePipe(&err_read, &err_write, &sa, 0)) {
+        if (out_read) CloseHandle(out_read);
+        if (out_write) CloseHandle(out_write);
+        if (err_read) CloseHandle(err_read);
+        if (err_write) CloseHandle(err_write);
+        free(wprog);
+        free(wline);
+        free(wcwd);
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_process_win_err("spawn", program, GetLastError());
+        return r;
+    }
+    SetHandleInformation(out_read, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(err_read, HANDLE_FLAG_INHERIT, 0);
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof si);
+    memset(&pi, 0, sizeof pi);
+    si.cb = sizeof si;
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = out_write;
+    si.hStdError = err_write;
+    BOOL started = CreateProcessW(
+        NULL,
+        wline,
+        NULL,
+        NULL,
+        TRUE,
+        0,
+        NULL,
+        wcwd,
+        &si,
+        &pi
+    );
+    DWORD start_error = started ? 0 : GetLastError();
+    CloseHandle(out_write);
+    CloseHandle(err_write);
+    free(wprog);
+    free(wline);
+    free(wcwd);
+    if (!started) {
+        CloseHandle(out_read);
+        CloseHandle(err_read);
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_process_win_err("spawn", program, start_error);
+        return r;
+    }
+    bloom_process_child *child = (bloom_process_child *)calloc(1, sizeof *child);
+    if (child == NULL) {
+        TerminateProcess(pi.hProcess, 1);
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        CloseHandle(out_read);
+        CloseHandle(err_read);
+        bloom_panicf(NULL, 0, "out of memory");
+    }
+    child->rc = 1;
+    child->process = pi.hProcess;
+    child->timeout_ms = options.f_timeout_ms;
+    child->out_reader.pipe = out_read;
+    child->out_reader.limit = limit;
+    child->err_reader.pipe = err_read;
+    child->err_reader.limit = limit;
+    child->out_thread = CreateThread(
+        NULL,
+        0,
+        bloom_process_reader_main,
+        &child->out_reader,
+        0,
+        NULL
+    );
+    child->err_thread = CreateThread(
+        NULL,
+        0,
+        bloom_process_reader_main,
+        &child->err_reader,
+        0,
+        NULL
+    );
+    CloseHandle(pi.hThread);
+    if (child->out_thread == NULL || child->err_thread == NULL) {
+        TerminateProcess(child->process, 1);
+        bloom_process_child_finalize(child);
+        bloom_process_buf_free(&child->out_reader.buf);
+        bloom_process_buf_free(&child->err_reader.buf);
+        free(child);
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_process_win_err("spawn", program, GetLastError());
+        return r;
+    }
+    r.tag = 0;
+    r.data.m_Ok._0 = bloom_process_wrap_child(child);
+    return r;
+}
+
+bloom_enum_Result_std_process_ProcessOutput_str bloom_process_wait(
+    bloom_struct_std_process_Process handle
+) {
+    bloom_enum_Result_std_process_ProcessOutput_str r;
+    bloom_process_child *child = bloom_process_child_from(handle.f_id);
+    if (child == NULL || child->process == NULL) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_str_from_bytes("wait: invalid process handle", 29);
+        return r;
+    }
+    DWORD timeout = child->timeout_ms > 0 ? (DWORD)child->timeout_ms : INFINITE;
+    DWORD waited = WaitForSingleObject(child->process, timeout);
+    if (waited == WAIT_TIMEOUT) {
+        TerminateProcess(child->process, 1);
+        WaitForSingleObject(child->process, INFINITE);
+        bloom_process_child_finalize(child);
+        bloom_process_buf_free(&child->out_reader.buf);
+        bloom_process_buf_free(&child->err_reader.buf);
+        child->out_reader.buf.data = NULL;
+        child->out_reader.buf.len = 0;
+        child->err_reader.buf.data = NULL;
+        child->err_reader.buf.len = 0;
+        char msg[96];
+        snprintf(msg, sizeof msg, "wait: process timed out after %lld ms", (long long)child->timeout_ms);
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_str_from_bytes(msg, strlen(msg));
+        return r;
+    }
+    if (waited != WAIT_OBJECT_0) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_process_win_err("wait", bloom_str_from_bytes("process", 7), GetLastError());
+        return r;
+    }
+    DWORD code = 0;
+    GetExitCodeProcess(child->process, &code);
+    child->exit_code = code;
+    bloom_process_child_finalize(child);
+    if (child->out_reader.overflow || child->err_reader.overflow) {
+        bloom_process_buf_free(&child->out_reader.buf);
+        bloom_process_buf_free(&child->err_reader.buf);
+        child->out_reader.buf.data = NULL;
+        child->out_reader.buf.len = 0;
+        child->err_reader.buf.data = NULL;
+        child->err_reader.buf.len = 0;
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_str_from_bytes(
+            "wait: process output exceeded the configured limit",
+            51
+        );
+        return r;
+    }
+    bloom_str out = bloom_str_from_bytes(
+        child->out_reader.buf.data ? child->out_reader.buf.data : "",
+        child->out_reader.buf.len
+    );
+    bloom_str err = bloom_str_from_bytes(
+        child->err_reader.buf.data ? child->err_reader.buf.data : "",
+        child->err_reader.buf.len
+    );
+    bloom_process_buf_free(&child->out_reader.buf);
+    bloom_process_buf_free(&child->err_reader.buf);
+    child->out_reader.buf.data = NULL;
+    child->out_reader.buf.len = 0;
+    child->err_reader.buf.data = NULL;
+    child->err_reader.buf.len = 0;
+    r.tag = 0;
+    r.data.m_Ok._0.f_exit_code = (int64_t)code;
+    r.data.m_Ok._0.f_stdout = out;
+    r.data.m_Ok._0.f_stderr = err;
+    return r;
+}
+
+bloom_enum_Option_i64 bloom_process_try_wait(
+    bloom_struct_std_process_Process handle
+) {
+    bloom_enum_Option_i64 r;
+    bloom_process_child *child = bloom_process_child_from(handle.f_id);
+    if (child == NULL || child->process == NULL) {
+        r.tag = 1;
+        return r;
+    }
+    DWORD code = 0;
+    if (WaitForSingleObject(child->process, 0) == WAIT_OBJECT_0) {
+        GetExitCodeProcess(child->process, &code);
+        child->exit_code = code;
+        child->finished = true;
+        r.tag = 0;
+        r.data.m_Some._0 = (int64_t)code;
+        return r;
+    }
+    r.tag = 1;
+    return r;
+}
+
+bloom_enum_Result_bool_str bloom_process_kill(
+    bloom_struct_std_process_Process handle
+) {
+    bloom_enum_Result_bool_str r;
+    bloom_process_child *child = bloom_process_child_from(handle.f_id);
+    if (child == NULL || child->process == NULL) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_str_from_bytes("kill: invalid process handle", 29);
+        return r;
+    }
+    if (WaitForSingleObject(child->process, 0) == WAIT_OBJECT_0) {
+        r.tag = 0;
+        r.data.m_Ok._0 = false;
+        return r;
+    }
+    BOOL ok = TerminateProcess(child->process, 1);
+    if (!ok) {
+        r.tag = 1;
+        r.data.m_Err._0 = bloom_process_win_err("kill", bloom_str_from_bytes("process", 7), GetLastError());
+        return r;
+    }
+    WaitForSingleObject(child->process, INFINITE);
+    r.tag = 0;
+    r.data.m_Ok._0 = true;
+    return r;
+}
+
+bloom_enum_Result_std_process_ProcessOutput_str bloom_process_run_options(
+    bloom_str program,
+    bloom_arr_str args,
+    bloom_struct_std_process_ProcessOptions options
+) {
+    bloom_enum_Result_std_process_ProcessOutput_str r;
+    bloom_enum_Result_std_process_Process_str spawned = bloom_process_spawn(
+        program,
+        args,
+        options
+    );
+    if (spawned.tag == 1) {
+        r.tag = 1;
+        r.data.m_Err._0 = spawned.data.m_Err._0;
+        return r;
+    }
+    r = bloom_process_wait(spawned.data.m_Ok._0);
+    bloom_process_child_release(&spawned.data.m_Ok._0.f_id);
+    return r;
+}
+
+int64_t bloom_process_output_exit_code(
+    bloom_struct_std_process_ProcessOutput output
+) {
+    return output.f_exit_code;
+}
+
+bool bloom_process_output_success(
+    bloom_struct_std_process_ProcessOutput output
+) {
+    return output.f_exit_code == 0;
+}
+
+bloom_str bloom_process_output_stdout(
+    bloom_struct_std_process_ProcessOutput output
+) {
+    return bloom_str_clone(output.f_stdout);
+}
+
+bloom_str bloom_process_output_stderr(
+    bloom_struct_std_process_ProcessOutput output
+) {
+    return bloom_str_clone(output.f_stderr);
+}
+
+#else /* !_WIN32 */
+
+bloom_process_handle bloom_process_child_retain(bloom_process_handle h) {
+    return h;
+}
+
+void bloom_process_child_release(bloom_process_handle *h) {
+    if (h != NULL) {
+        *h = 0;
+    }
+}
+
+bloom_enum_Result_std_process_Process_str bloom_process_spawn(
+    bloom_str program,
+    bloom_arr_str args,
+    bloom_struct_std_process_ProcessOptions options
+) {
+    bloom_enum_Result_std_process_Process_str r;
+    r.tag = 1;
+    r.data.m_Err._0 = bloom_str_from_bytes(
+        "spawn: only supported on Windows",
+        32
+    );
+    return r;
+}
+
+bloom_enum_Result_std_process_ProcessOutput_str bloom_process_wait(
+    bloom_struct_std_process_Process handle
+) {
+    bloom_enum_Result_std_process_ProcessOutput_str r;
+    r.tag = 1;
+    r.data.m_Err._0 = bloom_str_from_bytes(
+        "wait: only supported on Windows",
+        30
+    );
+    return r;
+}
+
+bloom_enum_Option_i64 bloom_process_try_wait(
+    bloom_struct_std_process_Process handle
+) {
+    bloom_enum_Option_i64 r;
+    r.tag = 1;
+    return r;
+}
+
+bloom_enum_Result_bool_str bloom_process_kill(
+    bloom_struct_std_process_Process handle
+) {
+    bloom_enum_Result_bool_str r;
+    r.tag = 1;
+    r.data.m_Err._0 = bloom_str_from_bytes(
+        "kill: only supported on Windows",
+        30
+    );
+    return r;
+}
+
+bloom_enum_Result_std_process_ProcessOutput_str bloom_process_run_options(
+    bloom_str program,
+    bloom_arr_str args,
+    bloom_struct_std_process_ProcessOptions options
+) {
+    bloom_str empty = {0, NULL, 0};
+    (void)options;
+    return bloom_process_run_in(program, args, empty);
+}
+
+int64_t bloom_process_output_exit_code(
+    bloom_struct_std_process_ProcessOutput output
+) {
+    return output.f_exit_code;
+}
+
+bool bloom_process_output_success(
+    bloom_struct_std_process_ProcessOutput output
+) {
+    return output.f_exit_code == 0;
+}
+
+bloom_str bloom_process_output_stdout(
+    bloom_struct_std_process_ProcessOutput output
+) {
+    return bloom_str_clone(output.f_stdout);
+}
+
+bloom_str bloom_process_output_stderr(
+    bloom_struct_std_process_ProcessOutput output
+) {
+    return bloom_str_clone(output.f_stderr);
+}
+
+#endif

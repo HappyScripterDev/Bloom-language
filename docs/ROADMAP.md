@@ -702,28 +702,54 @@ Vertagt (weiterhin geplant):
 - Linux-/macOS-GUI-Backends
 - Weitere Web-/Serverfunktionen (Streaming/Range, WebSocket) und Ökosystem
 
-## Version 0.23.0 – Server, Web und Automatisierung (geplant)
+## Version 0.23.0 – Allgemeine Softwareentwicklung, CLI und Automatisierung (implementiert)
 
-Bloom soll die erste Wahl für Server-Software, Webseiten und
-Automatisierung unter Windows (später auch Linux) werden: Rust-ähnliche
-Sicherheit und Typen, Python-ähnlich einfache Bedienung, C-ähnlich
-nativer Output.
+- **`std.env`:** Argumente, Umgebungsvariablen (fehlend vs. leer),
+  cwd/set_current_dir, Exe-Pfad, OS/Arch, Prozess-ID; Unicode unter
+  Windows; leere Werte prozesslokal.
+- **`std.process` erweitert:** direkter Prozessstart ohne Shell,
+  MSVC-Quoting, `spawn`/`wait`/`try_wait`/`kill`, `run_options` mit
+  Arbeitsverzeichnis, Timeout (bis 24 h) und Ausgabelimit (8/64 MiB),
+  parallele Pipe-Reader, referenzgezählte Handles.
+- **`std.cli`:** Command/Parsed, Flags, Optionen, Positionsargumente,
+  Subcommands, Defaults, Pflichtfelder, `--name=value`, `--`,
+  kurze/kombinierte Flags, Hilfe als String; keine Prozessbeendigung
+  aus der Bibliothek.
+- **`std.collections`:** String-`List`, `Map`, `Set` mit den
+  Kernoperationen, klaren Index-/Schlüsselfehlern, 1-Mio.-Limit und
+  vollständiger Ownership (Kopien, Remove/Clear/Release).
+- **`std.io`:** explizite Textausgabe/Fehlerausgabe, Flush,
+  `read_line` (EOF vs. leer), `read_stdin` mit Limit und
+  UTF-8-Prüfung.
+- **Beispiele:** `env_info`, `cli_basic`, `cli_subcommands`,
+  `process_run`, `process_output`, `process_timeout`,
+  `collections_list`, `collections_map`, `collections_set`,
+  `automation_build`, `automation_project`, `bloom_task_runner`
+- **Tests:** 545 (323 Unit + 206 E2E + 9 Desktop + 7 neue
+  General-Integrationstests); Argument-/Env-/Quoting-, Timeout-,
+  Ausgabelimit-, Spawn/Kill-, CLI-, Collection-, IO- und
+  Automatisierungsfälle, jeweils mit `live allocations: 0`.
 
-- **Server:** bessere HTTP-Server-Ergonomie (Routing-Gruppen,
-  Middleware-/Handler-Struktur ohne Closures, graceful shutdown,
-  Streaming/Range, WebSocket-Grundlagen), Timeouts und Limits.
-- **Web:** Multipart-Uploads, ETag/Last-Modified, Template-Includes,
-  bessere Formular-/Session-Integration, JSON-Streaming.
-- **Automatisierung:** CLI-Argumente, Dateisystem-Watcher, geplante
-  Jobs/Timer, Process-Pipelines, bessere Fehlerberichte.
-- **Sprache:** Sammlungen/Iteratoren, Optional/Result-Ergonomie,
-  Module/Paketierung, bessere Generics und Fehlermeldungen.
-- **Desktop:** Accessibility, echte Multi-Monitor-DPI-Tests,
-  Dateidialog-Erfolgspfade automatisieren, weitere Controls.
-- **Tooling:** Test-Runner, Projektvorlagen, Dokumentation und
-  reproduzierbare Builds.
+Vertagt (weiterhin geplant):
 
-## Version 1.0.0+ – Ökosystem (geplant)
+- Generische Collections, Iteratoren, Thread-sichere Umgebungsänderungen
+- Prozess-Environment-Overrides, stdin-Umleitung, Job-Objekte/Baum-Kill
+- CLI-Optionen vor Subcommands, automatische Hilfe/Version, Shell-Parsing
+- Multipart, Streaming, WebSocket, Middleware, Server-Cancellation
+- Echte Multi-Monitor-/Screenreader-Tests, weitere Desktop-Controls
+
+## Version 0.24.0 – Server, Web und Nebenläufigkeit (geplant)
+
+- Thread-/Synchronisationsgrundlagen, sichere Channels, kontrollierte
+  gemeinsame Daten, parallele Aufgaben
+- Asynchrone Netzwerkoperationen, HTTP-Streaming, Server-Shutdown und
+  Cancellation, Middleware/Request-Pipelines
+- Generische Collections und Iteratoren auf einem ausgebauten
+  Genericsystem
+- Weitere Automatisierung (Dateisystem-Watcher, Timer, Pipelines)
+  und Ausbau der Server-/Web-Ergonomie
+
+## Version 1.0.0+ – Ökosystem (geplant)+ – Ökosystem (geplant)
 
 - Paketmanager, Language Server (LSP), Debug-Informationen
 - Optimierungen, zusätzliche Backends (LLVM IR, WebAssembly)

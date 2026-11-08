@@ -109,6 +109,12 @@ fn c_type(ty: &Type) -> String {
         Type::Limiter => "bloom_auth_limiter_handle".to_string(),
         Type::Ui => "bloom_ui_handle".to_string(),
         Type::DesktopWindow => "bloom_desktop_window_handle".to_string(),
+        Type::List => "bloom_list_handle".to_string(),
+        Type::Map => "bloom_map_handle".to_string(),
+        Type::Set => "bloom_set_handle".to_string(),
+        Type::ProcessHandle => "bloom_process_handle".to_string(),
+        Type::CliCommand => "bloom_cli_command_handle".to_string(),
+        Type::CliParsed => "bloom_cli_parsed_handle".to_string(),
         Type::Struct(name, args) => {
             format!("bloom_struct_{}", named_mangle(name, args))
         }
@@ -275,7 +281,13 @@ impl<'a> CEmitter<'a> {
             | Type::Stmt
             | Type::Limiter
             | Type::Ui
-            | Type::DesktopWindow => true,
+            | Type::DesktopWindow
+            | Type::List
+            | Type::Map
+            | Type::Set
+            | Type::ProcessHandle
+            | Type::CliCommand
+            | Type::CliParsed => true,
             Type::Struct(name, args) => {
                 if let Some(info) = self.checked.structs.get(name) {
                     let bindings: HashMap<String, Type> = info
@@ -328,6 +340,12 @@ impl<'a> CEmitter<'a> {
             Type::Limiter => Some("bloom_auth_limiter_retain".to_string()),
             Type::Ui => Some("bloom_ui_retain".to_string()),
             Type::DesktopWindow => Some("bloom_desktop_window_retain".to_string()),
+            Type::List => Some("bloom_collections_list_retain".to_string()),
+            Type::Map => Some("bloom_collections_map_retain".to_string()),
+            Type::Set => Some("bloom_collections_set_retain".to_string()),
+            Type::ProcessHandle => Some("bloom_process_child_retain".to_string()),
+            Type::CliCommand => Some("bloom_cli_command_retain".to_string()),
+            Type::CliParsed => Some("bloom_cli_parsed_retain".to_string()),
             Type::Array(elem) => Some(format!("bloom_arr_{}_clone", arr_suffix(elem))),
             Type::Slice(elem) => Some(format!("bloom_slice_{}_clone", arr_suffix(elem))),
             Type::Struct(name, args) | Type::Enum(name, args) => {
@@ -357,6 +375,12 @@ impl<'a> CEmitter<'a> {
             Type::Limiter => Some("bloom_auth_limiter_release".to_string()),
             Type::Ui => Some("bloom_ui_release".to_string()),
             Type::DesktopWindow => Some("bloom_desktop_window_release".to_string()),
+            Type::List => Some("bloom_collections_list_release".to_string()),
+            Type::Map => Some("bloom_collections_map_release".to_string()),
+            Type::Set => Some("bloom_collections_set_release".to_string()),
+            Type::ProcessHandle => Some("bloom_process_child_release".to_string()),
+            Type::CliCommand => Some("bloom_cli_command_release".to_string()),
+            Type::CliParsed => Some("bloom_cli_parsed_release".to_string()),
             Type::Array(elem) => Some(format!("bloom_arr_{}_drop", arr_suffix(elem))),
             Type::Slice(elem) => Some(format!("bloom_slice_{}_drop", arr_suffix(elem))),
             Type::Struct(name, args) | Type::Enum(name, args) => {
@@ -663,6 +687,23 @@ impl<'a> CEmitter<'a> {
                 .push_str(include_str!("../runtime/bloom_desktop.c"));
             self.out.push('\n');
         }
+        if loaded.contains("std::env") {
+            self.out.push_str(include_str!("../runtime/bloom_env.c"));
+            self.out.push('\n');
+        }
+        if loaded.contains("std::collections") {
+            self.out
+                .push_str(include_str!("../runtime/bloom_collections.c"));
+            self.out.push('\n');
+        }
+        if loaded.contains("std::cli") {
+            self.out.push_str(include_str!("../runtime/bloom_cli.c"));
+            self.out.push('\n');
+        }
+        if loaded.contains("std::io") {
+            self.out.push_str(include_str!("../runtime/bloom_io.c"));
+            self.out.push('\n');
+        }
     }
 
     fn emit_globals(&mut self) {
@@ -755,6 +796,45 @@ impl<'a> CEmitter<'a> {
             self.out.push_str(
                 "static bloom_desktop_window_handle bloom_desktop_window_retain(bloom_desktop_window_handle h);\n\
                  static void bloom_desktop_window_release(bloom_desktop_window_handle *h);\n\n",
+            );
+        }
+        if self
+            .checked
+            .functions
+            .iter()
+            .any(|sig| sig.module == "std::collections")
+        {
+            self.out.push_str(
+                "static bloom_list_handle bloom_collections_list_retain(bloom_list_handle h);\n\
+                 static void bloom_collections_list_release(bloom_list_handle *h);\n\
+                 static bloom_map_handle bloom_collections_map_retain(bloom_map_handle h);\n\
+                 static void bloom_collections_map_release(bloom_map_handle *h);\n\
+                 static bloom_set_handle bloom_collections_set_retain(bloom_set_handle h);\n\
+                 static void bloom_collections_set_release(bloom_set_handle *h);\n\n",
+            );
+        }
+        if self
+            .checked
+            .functions
+            .iter()
+            .any(|sig| sig.module == "std::process")
+        {
+            self.out.push_str(
+                "static bloom_process_handle bloom_process_child_retain(bloom_process_handle h);\n\
+                 static void bloom_process_child_release(bloom_process_handle *h);\n\n",
+            );
+        }
+        if self
+            .checked
+            .functions
+            .iter()
+            .any(|sig| sig.module == "std::cli")
+        {
+            self.out.push_str(
+                "static bloom_cli_command_handle bloom_cli_command_retain(bloom_cli_command_handle h);\n\
+                 static void bloom_cli_command_release(bloom_cli_command_handle *h);\n\
+                 static bloom_cli_parsed_handle bloom_cli_parsed_retain(bloom_cli_parsed_handle h);\n\
+                 static void bloom_cli_parsed_release(bloom_cli_parsed_handle *h);\n\n",
             );
         }
         if self
@@ -2027,7 +2107,12 @@ impl<'a> CEmitter<'a> {
                     || info.base_c_name.starts_with("bloom_stmt_")
                     || info.base_c_name.starts_with("bloom_auth_")
                     || info.base_c_name.starts_with("bloom_ui_")
-                    || info.base_c_name.starts_with("bloom_desktop_") =>
+                    || info.base_c_name.starts_with("bloom_desktop_")
+                    || info.base_c_name.starts_with("bloom_env_")
+                    || info.base_c_name.starts_with("bloom_collections_")
+                    || info.base_c_name.starts_with("bloom_process_")
+                    || info.base_c_name.starts_with("bloom_cli_")
+                    || info.base_c_name.starts_with("bloom_io_") =>
             {
                 self.emit_stdlib_call(&info.base_c_name, &info.params, args, id)
             }

@@ -1,0 +1,35 @@
+// Automatisierung: Projektordner anlegen, Dateien schreiben und aufräumen.
+use std::env;
+use std::fs;
+use std::process;
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let base = env::current_dir()?;
+    let dir = fs::join_path(base, "bloom_auto_build_" + str(env::process_id()));
+    fs::create_dir_all(dir)?;
+    let src = fs::join_path(dir, "main.blm");
+    fs::write_text(src, "fn main() -> int { return 0; }\n")?;
+    let options = process::ProcessOptions {
+        directory: dir,
+        timeout_ms: 5000,
+        max_output: 1048576
+    };
+    let out = process::run_options("C:\\Windows\\System32\\cmd.exe", ["/C", "echo build gestartet & echo build fertig"], options)?;
+    print(process::stdout(out));
+    println("build-success=" + str(process::success(out)));
+    fs::remove_file(src)?;
+    fs::remove_dir(dir)?;
+    return Result::Ok(0);
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

@@ -1,0 +1,49 @@
+// Kommandozeile: Flag, Option, Positionsargument und Hilfe.
+// Aufruf: cli_basic.exe --verbose --target linux datei.txt
+use std::cli;
+use std::env;
+
+fn run() -> Result<int, string> {
+    let cmd = cli::command("cli_basic", "Kleines Beispielwerkzeug");
+    cli::flag(cmd, "verbose", "mehr ausgeben")?;
+    cli::option(cmd, "target", "Zielplattform", "windows", false)?;
+    cli::argument(cmd, "input", "Eingabedatei", true)?;
+    let args = env::args();
+    let argv = slice(args, 1, len(args));
+    match cli::parse(cmd, argv) {
+        Result::Ok(parsed) => show(parsed),
+        Result::Err(e) => report(cmd, e)
+    };
+    return Result::Ok(0);
+}
+
+fn show(parsed: cli::Parsed) -> void {
+    if cli::has(parsed, "verbose") {
+        println("verbose aktiv");
+    }
+    match cli::value(parsed, "target") {
+        Option::Some(v) => println("target=" + v),
+        Option::None => println("target=windows")
+    };
+    match cli::positional(parsed, 0) {
+        Option::Some(v) => println("input=" + v),
+        Option::None => println("input=fehlt")
+    };
+}
+
+fn report(cmd: cli::Command, error: string) -> void {
+    println("Fehler: " + error);
+    println(cli::help(cmd));
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

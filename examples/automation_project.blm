@@ -1,0 +1,34 @@
+// Automatisierung: neues Projektverzeichnis mit Dateien anlegen.
+use std::env;
+use std::fs;
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let base = env::current_dir()?;
+    let dir = fs::join_path(base, "bloom_project_" + str(env::process_id()));
+    fs::create_dir_all(dir)?;
+    let src = fs::join_path(dir, "src");
+    fs::create_dir_all(src)?;
+    fs::write_text(fs::join_path(src, "main.blm"), "fn main() -> int { return 0; }\n")?;
+    fs::write_text(fs::join_path(dir, "README.md"), "# Neues Bloom-Projekt\n")?;
+    fs::write_text(fs::join_path(dir, "bloom.toml"), "name = \"demo\"\nentry = \"src/main.blm\"\n")?;
+    let entries = fs::read_dir(dir)?;
+    println("entries=" + join(entries, ","));
+    fs::remove_file(fs::join_path(src, "main.blm"))?;
+    fs::remove_dir(src)?;
+    fs::remove_file(fs::join_path(dir, "README.md"))?;
+    fs::remove_file(fs::join_path(dir, "bloom.toml"))?;
+    fs::remove_dir(dir)?;
+    return Result::Ok(0);
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

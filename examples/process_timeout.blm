@@ -1,0 +1,27 @@
+// Timeout: ein zu langsamer Prozess wird beendet und als Fehler gemeldet.
+use std::process;
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    let options = process::ProcessOptions {
+        directory: "",
+        timeout_ms: 300,
+        max_output: 65536
+    };
+    match process::run_options("C:\\Windows\\System32\\cmd.exe", ["/C", "ping -n 5 127.0.0.1 > nul"], options) {
+        Result::Ok(_) => println("timeout=not-triggered"),
+        Result::Err(e) => println("timeout=" + str(contains(e, "timed out")))
+    };
+    return Result::Ok(0);
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

@@ -1,0 +1,33 @@
+// Umgebung: Argumente, Variablen, Arbeitsverzeichnis und Systeminfo.
+use std::env;
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn run() -> Result<int, string> {
+    println("os=" + env::os() + " arch=" + env::arch());
+    println("pid=" + str(env::process_id()));
+    println("args=" + str(len(env::args())));
+    let dir = env::current_dir()?;
+    println("cwd=" + dir);
+    let exe = env::executable_path()?;
+    println("exe=" + exe);
+    env::set("BLOOM_ENV_DEMO", "Hallo Welt")?;
+    match env::get("BLOOM_ENV_DEMO") {
+        Option::Some(v) => println("value=" + v),
+        Option::None => println("value=missing")
+    };
+    println("has=" + str(env::has("BLOOM_ENV_DEMO")));
+    env::remove("BLOOM_ENV_DEMO")?;
+    println("after-remove=" + str(env::has("BLOOM_ENV_DEMO")));
+    return Result::Ok(0);
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

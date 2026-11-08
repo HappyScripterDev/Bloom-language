@@ -1,0 +1,54 @@
+// Unterbefehle: mytool build --release --target windows
+use std::cli;
+use std::env;
+
+fn run() -> Result<int, string> {
+    let cmd = cli::command("mytool", "Build-Werkzeug");
+    cli::flag(cmd, "verbose", "mehr ausgeben")?;
+    let build = cli::subcommand(cmd, "build", "Projekt bauen")?;
+    cli::flag(build, "release", "Release bauen")?;
+    cli::option(build, "target", "Zielplattform", "windows", false)?;
+    let serve = cli::subcommand(cmd, "serve", "Server starten")?;
+    cli::option(serve, "port", "Port", "8080", false)?;
+
+    let args = env::args();
+    let argv = slice(args, 1, len(args));
+    match cli::parse(cmd, argv) {
+        Result::Ok(parsed) => show(parsed),
+        Result::Err(e) => report(cmd, e)
+    };
+    return Result::Ok(0);
+}
+
+fn show(parsed: cli::Parsed) -> void {
+    match cli::subcommand_name(parsed) {
+        Option::Some(name) => println("subcommand=" + name),
+        Option::None => println("subcommand=fehlt")
+    };
+    println("release=" + str(cli::has(parsed, "release")));
+    match cli::value(parsed, "target") {
+        Option::Some(v) => println("target=" + v),
+        Option::None => println("target=windows")
+    };
+    match cli::value(parsed, "port") {
+        Option::Some(v) => println("port=" + v),
+        Option::None => println("port=8080")
+    };
+}
+
+fn report(cmd: cli::Command, error: string) -> void {
+    println("Fehler: " + error);
+    println(cli::help(cmd));
+}
+
+fn main() -> int {
+    return match run() {
+        Result::Ok(code) => code,
+        Result::Err(e) => fehler(e)
+    };
+}
+
+fn fehler(e: string) -> int {
+    println("FEHLER: " + e);
+    return 1;
+}

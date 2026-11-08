@@ -293,6 +293,38 @@ verwaltet; die Runtime gibt nur eigene Puffer und Labels frei. Die
 internen Hooks `debug_event_flood`/`debug_cross_thread` existieren nur
 für Tests.
 
+**`std::collections` (0.23) sind referenzgezählte String-Container.**
+`List`, `Map` und `Set` sind Besitzwerte (`Type::List/Map/Set`).
+Eingaben werden beim Einfügen kopiert; Remove/Clear/Release geben die
+Kopien frei. Ein fehlgeschlagenes Insert (leerer Schlüssel, Limit)
+übernimmt keinen Besitz und verändert nichts. `get`/`remove`/`values`
+liefern eigene Kopien. Kapazität wächst bis 1.048.576; Map/Set nutzen
+FNV-1a mit linearem Sondieren und Tombsstones; die Reihenfolge ist
+nicht garantiert. Es gibt keine generischen Elemente, keine Iteratoren
+und keine Thread-Sicherheit.
+
+**`std::process::Process` ist ein referenzgezähltes Handle.** Beim
+Spawn werden Prozess-/Thread-/Pipe-Handles und zwei Reader-Threads
+angelegt; die Puffer sind auf das Ausgabelimit begrenzt. `wait` wartet
+(optional mit Timeout), beendet bei Ablauf den direkten Kindprozess,
+joint die Reader und schließt alle Handles. `try_wait` konsumiert keine
+Ausgabe; `kill` beendet den Prozess. Der letzte Handle beendet einen
+noch laufenden Prozess und gibt Puffer/Handles frei. Kein Job-Objekt,
+kein Baum-Kill; POSIX nutzt `run`/`run_in`.
+
+**`std::cli::Command`/`Parsed` sind referenzgezählte Handles.**
+Commands besitzen Definitionen (Name/Beschreibung/Default als Strings)
+und halten ihre Subcommands mit je einer Referenz; der Aufrufer erhält
+eine weitere. Parsed besitzt Kopien der Namen/Werte/Positionals und den
+Subcommand-Namen; Defaults werden beim Parsen materialisiert. Fehler
+geben den halbfertigen Parsed-Zustand frei. Limits: 64 Definitionen,
+16 Subcommands, 128 Einträge, 64 Positionals.
+
+**`std::env`-Leerwerte** liegen in einer statischen prozesslokalen
+Tabelle (max. 64 Namen), weil Windows leere Variablen nicht speichert;
+sie werden nicht an Kindprozesse vererbt. Alle Tests der neuen Module
+prüfen `live allocations: 0`.
+
 Alle Stdlib-Tests
 laufen unter `BLOOM_MEM_REPORT=1`. Getestet wird nativ mit MSVC
 (Windows). Valgrind/ASan sind auf dieser Toolchain nicht verfügbar und

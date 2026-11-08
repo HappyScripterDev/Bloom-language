@@ -84,6 +84,18 @@ typedef int64_t bloom_ui_handle;
 /* Handle for a native window (std::desktop, bloom_desktop.c). */
 typedef int64_t bloom_desktop_window_handle;
 
+/* Handles for string collections (std::collections, bloom_collections.c). */
+typedef int64_t bloom_list_handle;
+typedef int64_t bloom_map_handle;
+typedef int64_t bloom_set_handle;
+
+/* Handle for a spawned process (std::process, bloom_process.c). */
+typedef int64_t bloom_process_handle;
+
+/* Handles for CLI definitions and parsed arguments (std::cli, bloom_cli.c). */
+typedef int64_t bloom_cli_command_handle;
+typedef int64_t bloom_cli_parsed_handle;
+
 /*
  * Calling convention for `extern "system"` declarations. On 32-bit Windows
  * this is `__stdcall`; on x64 and other targets it is the default

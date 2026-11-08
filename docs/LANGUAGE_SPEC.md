@@ -2411,6 +2411,173 @@ pub struct LayoutItem { flex: int, width: int, height: int, align: string }
 /ENTRY:mainCRTStartup`, `--console` erzwingt die Konsole. `--emit-c`
 schreibt die vollständige Runtime.
 
+### 13.19 Standardmodul `std::env`
+
+| Funktion | Signatur |
+| --- | --- |
+| `args()` | `() -> [string]` |
+| `get(name)` | `string -> Option<string>` |
+| `has(name)` | `string -> bool` |
+| `set(name, value)` / `remove(name)` | `string, string` / `string -> Result<bool, string>` |
+| `current_dir()` / `set_current_dir(path)` | `() -> Result<string, string>` / `string -> Result<bool, string>` |
+| `executable_path()` | `() -> Result<string, string>` |
+| `os()` / `arch()` | `() -> string` |
+| `process_id()` | `() -> int` |
+
+- `args()` enthält den Programmdateipfad als Element 0 (Windows-
+  Semantik); maximal 4096 Argumente, je 1 MiB. Unicode läuft über
+  `GetCommandLineW`/`CommandLineToArgvW`.
+- `get` unterscheidet fehlend (`None`) und vorhanden-leer (`Some("")`).
+  Windows speichert leere Werte nicht; sie werden prozesslokal
+  simuliert (max. 64 Namen, 511 Bytes) und nicht an Kindprozesse
+  vererbt. `set` mit leerem Wert entfernt die OS-Variable und legt den
+  prozesslokalen Eintrag an.
+- Namen: 1..32767 Bytes, kein `=`, kein NUL. Werte max. 32767 Bytes.
+  `env` gibt keine Variablen automatisch aus (keine Secrets im Log).
+- `set`/`remove` ändern globalen Prozesszustand; sie sind nicht
+  thread-sicher. Unter Windows werden Unicode-APIs verwendet.
+
+### 13.20 `std::process`: spawn, Wait, Timeout und Limits
+
+Zusätzlich zu `run`/`run_in` (13.3):
+
+| Funktion | Signatur |
+| --- | --- |
+| `run_options(program, args, options)` | `string, [string], ProcessOptions -> Result<ProcessOutput, string>` |
+| `spawn(program, args, options)` | `string, [string], ProcessOptions -> Result<Process, string>` |
+| `wait(child)` | `Process -> Result<ProcessOutput, string>` |
+| `try_wait(child)` | `Process -> Option<int>` |
+| `kill(child)` | `Process -> Result<bool, string>` |
+| `exit_code(output)` / `success(output)` | `ProcessOutput -> int` / `bool` |
+| `stdout(output)` / `stderr(output)` | `ProcessOutput -> string` |
+
+```bloom
+pub struct Process { id }
+pub struct ProcessOptions { directory: string, timeout_ms: int, max_output: int }
+```
+
+- **Kein Shell:** `program` wird als Programmdatei gestartet, `args`
+  getrennt übergeben. Windows erhält eine nach den MSVC-Regeln
+  quotierte Kommandozeile; Sonderzeichen in Argumenten werden nicht als
+  Shell-Syntax ausgeführt. `cmd.exe`/PowerShell müssen bewusst als
+  Programm mit eigenen Argumenten gestartet werden.
+- **Options:** `directory` leer = erben; `timeout_ms` 0 = kein Timeout,
+  sonst 1..86400000; `max_output` 0 = 8 MiB, max. 64 MiB (pro Kanal).
+  Environment-Overrides und stdin-Umleitung sind nicht implementiert.
+- **Pipes:** stdout/stderr werden ab dem Start parallel in eigenen
+  Threads gelesen; ein voller Pipe-Puffer blockiert das Kind nicht.
+  Überschreitet die Ausgabe das Limit, wird weiter gelesen/verworfen und
+  `wait` liefert `Err("... output exceeded ...")`.
+- **Wait/Timeout:** `wait` wartet höchstens `timeout_ms`; bei Ablauf
+  wird der direkte Kindprozess beendet, auf sein Ende gewartet und
+  `Err("... timed out ...")` geliefert. Kein Job-Objekt, kein
+  Baum-Kill; Kindeskinder können weiterlaufen.
+- **Handles:** `Process` ist referenzgezählt. `wait` schließt die
+  Prozess-/Pipe-Handles; `try_wait` liefert `Some(code)` oder `None`,
+  ohne die Ausgabe zu verbrauchen. Der letzte Handle beendet einen noch
+  laufenden Prozess beim Freigeben und schließt alle Handles.
+  Doppeltes `wait` liefert einen Fehler.
+- **Grenzen:** Windows vollständig; POSIX implementiert `run`/`run_in`,
+  die neuen APIs liefern dort `Err`. Ausgabe ist Byte-exakt in
+  Bloom-Strings; Exitcode ist der echte Prozesscode.
+
+### 13.21 Standardmodul `std::cli`
+
+| Funktion | Signatur |
+| --- | --- |
+| `command(name, description)` | `string, string -> Command` |
+| `flag(command, name, description)` | `Command, string, string -> Result<bool, string>` |
+| `option(command, name, description, default, required)` | `Command, string, string, string, bool -> Result<bool, string>` |
+| `argument(command, name, description, required)` | `Command, string, string, bool -> Result<bool, string>` |
+| `subcommand(command, name, description)` | `Command, string, string -> Result<Command, string>` |
+| `parse(command, args)` | `Command, [string] -> Result<Parsed, string>` |
+| `has(parsed, name)` | `Parsed, string -> bool` |
+| `value(parsed, name)` | `Parsed, string -> Option<string>` |
+| `positional(parsed, index)` | `Parsed, int -> Option<string>` |
+| `subcommand_name(parsed)` | `Parsed -> Option<string>` |
+| `help(command)` | `Command -> string` |
+
+```bloom
+pub struct Command { id }
+pub struct Parsed { id }
+```
+
+- Parserregeln: `--name`, `--name=value`, `--name value`, `-n`,
+  `-n=value`, kombinierte kurze Flags (`-abc`), `--` beendet die
+  Optionsverarbeitung. Flags nehmen keine Werte; Optionen brauchen
+  einen Wert. Doppelte Optionen: letzter Wert gewinnt. Unbekannte
+  Optionen, fehlende Werte, fehlende Pflichtoptionen/-argumente und
+  überzählige Positionalargumente sind `Err`.
+- `option` mit nicht-leerem Default: `value` liefert den Default,
+  `has` bleibt `false` (nicht explizit gesetzt). Leerer Default = kein
+  Default. Pflichtoptionen ohne Default müssen vorkommen.
+- Subcommands: Das erste Positionalargument muss einem registrierten
+  Unterbefehl entsprechen; danach gelten dessen Definitionen. Eine
+  Ebene; Optionen vor dem Subcommand werden nicht unterstützt.
+- `command`, `flag`, … liefern konkrete Fehler; der Parser beendet den
+  Prozess nie. `help` erzeugt Text (max. 64 KiB) aus Name, Beschreibung,
+  Definitionen und Subcommands. `--help`/`--version` sind normale,
+  selbst registrierte Flags.
+- Limits: 64 Definitionen, 16 Subcommands, 128 geparste Einträge,
+  64 Positionsargumente; Strings max. 1 MiB.
+
+### 13.22 Standardmodul `std::collections`
+
+Erste sichere Variante für **Strings** (keine generischen Elemente):
+
+| Typ/Funktionen | Signatur |
+| --- | --- |
+| `list_new()` | `() -> List` |
+| `list_push` / `list_remove(index)` | `List, string` / `List, int -> Result<bool, string>` / `Result<string, string>` |
+| `list_get` / `list_set` / `list_insert` / `list_remove` | `List, int[, string] -> Result<…, string>` |
+| `list_clear` / `list_len` / `list_capacity` / `list_values` | `List -> bool/int/[string]` |
+| `map_new()` | `() -> Map` |
+| `map_insert(map, key, value)` | `Map, string, string -> Result<bool, string>` (`true` = ersetzt) |
+| `map_get` / `map_has` / `map_remove` | `Map, string -> Option<string>` / `bool` / `Result<bool, string>` |
+| `map_keys` / `map_values` / `map_len` / `map_clear` | `Map -> [string]/int/bool` |
+| `set_new()` | `() -> Set` |
+| `set_insert` / `set_has` / `set_remove` | `Set, string -> Result<bool, string>` / `bool` / `Result<bool, string>` |
+| `set_values` / `set_len` / `set_clear` | `Set -> [string]/int/bool` |
+
+```bloom
+pub struct List { id }
+pub struct Map { id }
+pub struct Set { id }
+```
+
+- **Ownership:** Collections sind referenzgezählte Handles. Eingaben
+  werden als Bloom-Strings kopiert; die Collection besitzt ihre Kopien
+  und gibt sie bei Remove/Clear/Release frei. Rückgaben (`get`,
+  `remove`, `values`, `keys`) sind eigene Kopien. Ein fehlgeschlagenes
+  Insert verändert die Collection nicht und übernimmt keinen Besitz.
+- **Limits:** 1.000.000 Einträge, Kapazität max. 1.048.576; Strings
+  max. 1 MiB. Map-/Set-Schlüssel müssen nicht leer sein. Map/Set sind
+  Hash-Tabellen (FNV-1a, lineares Sondieren); die Reihenfolge von
+  `keys`/`values` ist **nicht garantiert**. List erhält die Reihenfolge.
+- **Fehler:** Ungültige Indizes, leere Schlüssel, zu lange Strings und
+  Kapazitätsüberschreitung liefern `Err`; `set_insert` liefert `false`
+  für ein bereits vorhandenes Element, `map_insert` `true` beim
+  Ersetzen.
+- **Nicht enthalten:** Generics, Iteratoren, parallele Mutation,
+  nicht-string Elemente. Deep-Copy-Semantik ist bewusst einfach und
+  leak-geprüft.
+
+### 13.23 Standardmodul `std::io`
+
+| Funktion | Signatur |
+| --- | --- |
+| `stdout_write(text)` / `stderr_write(text)` | `string -> Result<bool, string>` |
+| `stdout_flush()` / `stderr_flush()` | `() -> Result<bool, string>` |
+| `read_line()` | `() -> Result<Option<string>, string>` |
+| `read_stdin(max_bytes)` | `int -> Result<string, string>` |
+
+- Text ist UTF-8; `read_line` entfernt `\r\n`/`\n`, unterscheidet EOF
+  (`None`) von einer leeren Zeile (`Some("")`), Limit 1 MiB.
+  `read_stdin(max_bytes=0)` liest bis 8 MiB, hart max. 64 MiB; zu viel
+  Eingabe und ungültiges UTF-8 sind Fehler. Die Konsole wird nicht
+  automatisch auf eine Codepage umgestellt; bei umgeleiteter Ausgabe
+  bleiben Bytes exakt.
+
 ## 14. Fehlerdiagnostik
 
 Format:
@@ -2504,7 +2671,7 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
 | 5 | Datei-/E/A-Fehler |
 | 70 | Laufzeitfehler im Bloom-Programm |
 
-## 16. Ausdrücklich nicht unterstützt (Version 0.22.0)
+## 16. Ausdrücklich nicht unterstützt (Version 0.23.0)
 
 - Referenzempfänger (`&self`/`&mut self`), `var self` auf Enums
 - Klassen, Vererbung, Interfaces
@@ -2548,6 +2715,19 @@ Diagnosen des Compilers sind Englisch, CLI-Meldungen Deutsch.
   Thread-sichere Fenster und verschachtelte Menüs** (std::desktop ist
   ein einzelner GUI-Thread mit Fenstern, Basiscontrols, Layouts, einer
   Menüebene und nativen Dateidialogen)
+- **Generische Collections, Iteratoren, parallele Mutation und
+  Nicht-String-Elemente** (std::collections bietet List/Map/Set für
+  Strings; Ownership ist kopierend und leak-geprüft)
+- **Prozess-Baum-Kill/Job-Objekte, Environment-Overrides und
+  stdin-Umleitung bei `spawn`/`run_options`; neue Prozess-APIs unter
+  POSIX** (Windows nutzt CreateProcessW; POSIX hat weiterhin
+  run/run_in)
+- **Automatisches `--help`/`--version`, verschachtelte CLI-
+  Subcommands, Optionen vor dem Subcommand und Shell-Parsing**
+  (std::cli parst nur getrennte Argumentlisten; Hilfe ist ein String)
+- **Dauerhafte leere Umgebungsvariablen, Thread-sichere
+  Umgebungsänderungen und Konsole-Codepage-Konvertierung** (leere
+  Werte sind unter Windows prozesslokal; std::io arbeitet mit UTF-8)
 - **OAuth/OIDC, externe Login-Anbieter, E-Mail-Verifikation,
   Passwort-zurücksetzen per E-Mail, MFA/Passkeys, JWT als
   Session-Ersatz, verteilte Session-Stores, ABAC/Policy-Sprachen,
